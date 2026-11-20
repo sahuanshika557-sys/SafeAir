@@ -1,21 +1,41 @@
-import type { ActionPlan, AirQualityReading, Language, LifestyleProfile } from '../types/index.ts';
+import type {
+  ActionPlan,
+  AirQualityReading,
+  Language,
+  LifestyleProfile,
+  LocationData,
+} from '../types/index.ts';
 
 /**
- * Generates a deterministic, rule-based fallback action plan tailored to AQI severity
- * and household profile when the Gemini API is unavailable.
+ * Generates a deterministic, rule-based fallback action plan tailored to AQI severity,
+ * optional location, and household profile when the Gemini API is unavailable.
  *
  * @param reading - Current live or manually entered air quality reading.
  * @param profile - Household lifestyle profile for tailoring advice.
  * @param language - Target UI language (`'en'` or `'hi'`).
+ * @param location - Optional location metadata stamped onto plan provenance.
  * @returns Complete four-section {@link ActionPlan} marked with `isFallback: true`.
  */
 export function buildRuleBasedFallbackPlan(
   reading: AirQualityReading,
   profile: LifestyleProfile,
   language: Language,
+  location?: LocationData,
 ): ActionPlan {
   const isSevere = reading.usAqi > 150;
   const isHindi = language === 'hi';
+  const placeName = location
+    ? [location.name, location.country].filter(Boolean).join(', ')
+    : undefined;
+
+  const provenance: Partial<ActionPlan> = {
+    generatedForLocationId: location?.id,
+    generatedForLocationName: placeName,
+    generatedForAqi: reading.usAqi,
+    generatedForCategoryKey: reading.category.key,
+    generatedForLanguage: language,
+    generatedForProfile: profile,
+  };
 
   const bestTimeWindow = isHindi
     ? 'दोपहर 1:00 बजे से शाम 4:00 बजे तक (सबसे कम स्मॉग जमाव)'
@@ -26,7 +46,8 @@ export function buildRuleBasedFallbackPlan(
 
   if (isHindi) {
     return {
-      summary: `वर्तमान AQI ${reading.usAqi} (${reading.category.labelHi}) के आधार पर यह नियम-आधारित सुरक्षा योजना तैयार की गई है।`,
+      ...provenance,
+      summary: `${placeName ? `${placeName} में ` : ''}वर्तमान AQI ${reading.usAqi} (${reading.category.labelHi}) के आधार पर यह नियम-आधारित सुरक्षा योजना तैयार की गई है।`,
       bestTimeWindow,
       worstTimeWindow,
       dailyRoutine: [
@@ -36,7 +57,7 @@ export function buildRuleBasedFallbackPlan(
             ? 'सुबह-सुबह बाहर व्यायाम बंद करें और इनडोर स्ट्रेचिंग करें।'
             : 'सुबह 9 बजे से पहले भारी बाहरी व्यायाम से बचें; दोपहर की धूप में हल्की सैर करें।',
           whyItHelps: 'सर्दियों की ठंडी सुबह में प्रदूषक जमीन के पास फंसे रहते हैं और गहरी सांस से फेफड़ों में जाते हैं।',
-          estimatedImpact: 'लगभग 25%–40% कम दैनिक PM2.5 श्वसन जोखिम',
+          estimatedImpact: '25%–40% कम दैनिक PM2.5 श्वसन जोखिम',
           timeWindow: 'सुबह 6:00 – 9:30 बजे टालें',
         },
         {
@@ -46,7 +67,7 @@ export function buildRuleBasedFallbackPlan(
               ? 'संभव हो तो मेट्रो या इलेक्ट्रिक बस का उपयोग करें और कार की खिड़कियाँ बंद कर रीसर्कुलेशन मोड चलाएँ।'
               : 'व्यस्त मुख्य सड़कों के बजाय कम ट्रैफिक वाली गलियों से यात्रा करें।',
           whyItHelps: 'मुख्य सड़कों और निजी वाहनों के धुएं से दूर रहने पर तात्कालिक NO2 और PM2.5 संपर्क घटता है।',
-          estimatedImpact: 'लगभग 15%–30% कम यात्रा प्रदूषण और ~1,500–2,300 ग्राम CO₂ बचत/दिन',
+          estimatedImpact: '15%–30% कम यात्रा प्रदूषण और ~1,500–2,300 ग्राम CO₂ बचत/दिन',
           timeWindow: 'सुबह और शाम के पीक ट्रैफिक में',
         },
       ],
@@ -57,7 +78,7 @@ export function buildRuleBasedFallbackPlan(
             'केवल दोपहर 1:30–3:30 बजे के बीच 15–20 मिनट खिड़कियाँ खोलें; बाकी समय दरारें गीले कपड़े या ड्राफ्ट स्टॉपर से सील रखें।',
           whyItHelps:
             'दिन के गर्म घंटों में बाहरी कण स्तर आमतौर पर सबसे कम होता है जिससे कमरे में ताजी हवा आती है।',
-          estimatedImpact: 'लगभग 20%–35% कम इनडोर धूल और स्मॉग प्रवेश',
+          estimatedImpact: '20%–35% कम इनडोर धूल और स्मॉग प्रवेश',
         },
         {
           title: profile.hasAirPurifier
@@ -68,7 +89,7 @@ export function buildRuleBasedFallbackPlan(
             : 'झाड़ू के बजाय गीला पोंछा लगाएँ; पत्तियां या पौधे PM2.5 नहीं हटाते, इसलिए HEPA या MERV-13 बॉक्स-फैन फ़िल्टर प्रभावी है।',
           whyItHelps:
             'गीला पोंछा जमी हुई धूल को फिर से हवा में उड़ने से रोकता है और मैकेनिकल फ़िल्टर बारीक कण पकड़ते हैं।',
-          estimatedImpact: 'लगभग 30%–55% कम इनडोर PM2.5 स्तर',
+          estimatedImpact: '30%–55% कम इनडोर PM2.5 स्तर',
         },
       ],
       sustainableAlternatives: [
@@ -79,14 +100,14 @@ export function buildRuleBasedFallbackPlan(
               ? 'लकड़ी/कोयले के बजाय इंडक्शन या LPG और प्रेशर कुकर का प्रयोग करें।'
               : 'खाना पकाते समय चिमनी या एग्जॉस्ट फैन चलाएँ और घर में अगरबत्ती/मोमबत्ती जलाने से बचें।',
           whyItHelps: 'ठोस ईंधन और घर के भीतर धुआँ घर के अंदर खतरनाक PM2.5 को कई गुना बढ़ा देता है।',
-          estimatedImpact: 'लगभग 35%–60% कम इनडोर धुआँ और ~900 ग्राम CO₂ बचत/दिन',
+          estimatedImpact: '35%–60% कम इनडोर धुआँ और ~900 ग्राम CO₂ बचत/दिन',
         },
         {
           title: 'कचरा और सूखे पत्ते न जलाएँ',
           detail: 'मोहल्ले में सूखे पत्तों की खाद बनाएँ और गीले-सूखे कचरे को अलग कर नगर निगम संग्रह में दें।',
           whyItHelps:
             'खुले में कचरा जलाने से जहरीला स्थानीय धुआँ और डाइऑक्सिन निकलते हैं जो पड़ोस को प्रभावित करते हैं।',
-          estimatedImpact: 'लगभग 10%–20% कम स्थानीय धुआँ और ~500 ग्राम CO₂ बचत/दिन',
+          estimatedImpact: '10%–20% कम स्थानीय धुआँ और ~500 ग्राम CO₂ बचत/दिन',
         },
       ],
       healthProtection: [
@@ -97,7 +118,7 @@ export function buildRuleBasedFallbackPlan(
             : 'भीड़भाड़ या धूल भरी सड़कों पर N95/FFP2 मास्क साथ रखें।',
           whyItHelps:
             'कपड़े के मास्क सूक्ष्म PM2.5 कण नहीं रोक सकते, जबकि सही फिट वाला N95 अधिकांश बारीक कण छान देता है।',
-          estimatedImpact: 'लगभग 40%–70% कम बारीक कण श्वसन (फिटिंग पर निर्भर)',
+          estimatedImpact: '40%–70% कम बारीक कण श्वसन (फिटिंग पर निर्भर)',
         },
         {
           title: 'संवेदनशील सदस्यों और लक्षणों की निगरानी',
@@ -115,7 +136,8 @@ export function buildRuleBasedFallbackPlan(
   }
 
   return {
-    summary: `Rule-based guidance generated for US AQI ${reading.usAqi} (${reading.category.labelEn}).`,
+    ...provenance,
+    summary: `Rule-based guidance for ${placeName ? `${placeName} at ` : ''}US AQI ${reading.usAqi} (${reading.category.labelEn}).`,
     bestTimeWindow,
     worstTimeWindow,
     dailyRoutine: [
@@ -126,7 +148,7 @@ export function buildRuleBasedFallbackPlan(
           : 'Avoid strenuous outdoor exercise before 9:30 AM; use midday hours for brief outdoor activity.',
         whyItHelps:
           'Cold winter nights trap vehicle and heating emissions near ground level until afternoon warmth disperses them.',
-        estimatedImpact: 'Approximate: 25%–40% lower daily PM2.5 inhalation',
+        estimatedImpact: '25%–40% lower daily PM2.5 inhalation',
         timeWindow: 'Avoid 5:30 AM – 9:30 AM',
       },
       {
@@ -137,8 +159,7 @@ export function buildRuleBasedFallbackPlan(
             : 'Prefer quieter side streets away from heavy diesel traffic and avoid idling intersections.',
         whyItHelps:
           'Busy corridors have sharp NO2 and ultrafine particle spikes that drop rapidly a block away from traffic.',
-        estimatedImpact:
-          'Approximate: 15%–30% lower commute exposure & ~1,500–2,300 g CO₂ saved/day',
+        estimatedImpact: '15%–30% lower commute exposure & ~1,500–2,300 g CO₂ saved/day',
         timeWindow: 'Peak commute hours',
       },
     ],
@@ -149,7 +170,7 @@ export function buildRuleBasedFallbackPlan(
           'Open windows for 15–20 minutes between 1:30 PM and 3:30 PM when outdoor haze dips; seal gaps with damp towels or draft tape at night.',
         whyItHelps:
           'Keeping windows shut during high-smog night hours slows outdoor PM2.5 infiltration indoors.',
-        estimatedImpact: 'Approximate: 20%–35% reduction in indoor smog infiltration',
+        estimatedImpact: '20%–35% reduction in indoor smog infiltration',
       },
       {
         title: profile.hasAirPurifier
@@ -160,7 +181,7 @@ export function buildRuleBasedFallbackPlan(
           : 'Wet-mop instead of dry sweeping. Note: houseplants do not meaningfully filter PM2.5; a budget MERV-13 box-fan filter or HEPA unit works far better.',
         whyItHelps:
           'Dry sweeping resuspends settled particulate matter, while mechanical HEPA/MERV-13 media physically traps fine particles.',
-        estimatedImpact: 'Approximate: 30%–55% lower indoor PM2.5 concentration',
+        estimatedImpact: '30%–55% lower indoor PM2.5 concentration',
       },
     ],
     sustainableAlternatives: [
@@ -172,7 +193,7 @@ export function buildRuleBasedFallbackPlan(
             : 'Run kitchen exhaust while cooking, use lids to shorten cook time, and skip incense or candles.',
         whyItHelps:
           'Indoor combustion produces concentrated PM2.5 and CO right inside living spaces.',
-        estimatedImpact: 'Approximate: 35%–60% less indoor cooking smoke & ~900 g CO₂ saved/day',
+        estimatedImpact: '35%–60% less indoor cooking smoke & ~900 g CO₂ saved/day',
       },
       {
         title: 'Zero open waste or leaf burning',
@@ -182,7 +203,7 @@ export function buildRuleBasedFallbackPlan(
             : 'Organize community leaf composting and choose electric room heating layers over charcoal braziers.',
         whyItHelps:
           'Open burning emits toxic fine particulates, PAHs, and carbon monoxide directly at breathing height.',
-        estimatedImpact: 'Approximate: 10%–20% lower neighborhood smoke & ~500 g CO₂ saved/day',
+        estimatedImpact: '10%–20% lower neighborhood smoke & ~500 g CO₂ saved/day',
       },
     ],
     healthProtection: [
@@ -193,7 +214,7 @@ export function buildRuleBasedFallbackPlan(
           : 'Carry an N95/FFP2 mask for congested roads or sudden haze spikes; cloth masks do not block PM2.5.',
         whyItHelps:
           'Electrostatic melt-blown filter layers capture fine PM2.5 droplets that pass straight through cloth.',
-        estimatedImpact: 'Approximate: 40%–70% lower inhaled PM2.5 (depends on facial seal)',
+        estimatedImpact: '40%–70% lower inhaled PM2.5 (depends on facial seal)',
       },
       {
         title: 'Monitor symptoms & know when to seek care',
@@ -203,8 +224,7 @@ export function buildRuleBasedFallbackPlan(
             : 'Seek medical evaluation promptly if you experience persistent cough, wheezing, chest pain, dizziness, or unusual shortness of breath.',
         whyItHelps:
           'Early clinical care prevents acute airway inflammation from escalating during multi-day smog episodes.',
-        estimatedImpact:
-          'Approximate: Timely intervention substantially lowers severe flare-up risk',
+        estimatedImpact: 'Timely intervention substantially lowers severe flare-up risk',
       },
     ],
     generatedAt: new Date().toISOString(),

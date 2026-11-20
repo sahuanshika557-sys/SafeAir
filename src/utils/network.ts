@@ -1,4 +1,9 @@
-import { OPEN_METEO_AQI_URL, OPEN_METEO_GEOCODING_URL } from '../constants/index.ts';
+import {
+  OPEN_METEO_AQI_URL,
+  OPEN_METEO_GEOCODING_URL,
+  REVERSE_GEOCODING_URL,
+} from '../constants/index.ts';
+import type { Language } from '../types/index.ts';
 
 /**
  * Linked timeout controller returned by {@link createLinkedTimeoutController}.
@@ -85,6 +90,26 @@ export function buildOpenMeteoAqiUrl(latitude: number, longitude: number): strin
   url.searchParams.set('longitude', longitude.toFixed(4));
   url.searchParams.set('current', 'us_aqi,pm2_5,pm10,nitrogen_dioxide,ozone');
   url.searchParams.set('timezone', 'auto');
+  return url.toString();
+}
+
+/**
+ * Builds the free no-key reverse geocoding URL (BigDataCloud) called server-side.
+ *
+ * @param latitude - Geographic latitude in decimal degrees.
+ * @param longitude - Geographic longitude in decimal degrees.
+ * @param language - Requested locality display language (`'en'` or `'hi'`).
+ * @returns Formatted reverse geocoding URL.
+ */
+export function buildReverseGeocodingUrl(
+  latitude: number,
+  longitude: number,
+  language: Language = 'en',
+): string {
+  const url = new URL(REVERSE_GEOCODING_URL);
+  url.searchParams.set('latitude', latitude.toFixed(4));
+  url.searchParams.set('longitude', longitude.toFixed(4));
+  url.searchParams.set('localityLanguage', language);
   return url.toString();
 }
 

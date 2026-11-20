@@ -1,26 +1,100 @@
-import { IMPACT_CHOICES, MAX_COMBINED_PM25_REDUCTION_PERCENT } from '../constants/index.ts';
-import type { ImpactChoiceId, ImpactEstimate, Language } from '../types/index.ts';
+import {
+  IMPACT_CHOICES,
+  IMPACT_DIMINISHING_FACTOR,
+  MAX_COMBINED_PM25_REDUCTION_PERCENT,
+} from '../constants/index.ts';
+import type {
+  ActionPlan,
+  ImpactChoiceId,
+  ImpactEstimate,
+  Language,
+  RecommendationItem,
+} from '../types/index.ts';
 
 /**
- * Computes approximate weekly CO2 savings (grams) and combined PM2.5 exposure reduction (%).
- * Exposure reductions combine multiplicatively so overlapping actions never exceed realistic bounds.
+ * Strips redundant leading "Approximate:", "Approx.", or Hindi "लगभग" prefixes from an
+ * item's `estimatedImpact` string so UI labels like "Estimated impact (approximate):"
+ * never read as "Estimated impact (approximate): Approximate: ...".
+ *
+ * @param rawImpact - Raw impact estimate string from Gemini or rule-based fallback.
+ * @param language - Active display language (`'en'` or `'hi'`).
+ * @returns Cleaned impact text without duplicated prefix labels.
+ */
+export function cleanImpactText(rawImpact: string, language: Language): string {
+  let cleaned = rawImpact.trim();
+  const patterns =
+    language === 'hi'
+      ? [
+          /^अनुमानित\s*प्रभाव\s*(\(लगभग\))?\s*[:：-]?\s*/i,
+          /^लगभग\s*[:：-]?\s*/i,
+          /^अनुमानतः?\s*[:：-]?\s*/i,
+          /^(estimated\s+impact\s*(\(approximate\))?|approximate|approx\.?|estimated)\s*[:：-]?\s*/i,
+        ]
+      : [
+          /^(estimated\s+impact\s*(\(approximate\))?|approximate|approx\.?|estimated)\s*[:：-]?\s*/i,
+        ];
+
+  let previous = '';
+  while (cleaned !== previous) {
+    previous = cleaned;
+    for (const pattern of patterns) {
+      cleaned = cleaned.replace(pattern, '').trim();
+    }
+  }
+  return cleaned || rawImpact.trim();
+}
+
+function cleanItems(
+  items: readonly RecommendationItem[],
+  language: Language,
+): RecommendationItem[] {
+  return items.map((item) => ({
+    ...item,
+    estimatedImpact: cleanImpactText(item.estimatedImpact, language),
+  }));
+}
+
+/**
+ * Normalizes every section of an {@link ActionPlan} to remove duplicate impact prefix wording.
+ *
+ * @param plan - Raw action plan from AI or rule-based fallback.
+ * @param language - Display language of the plan.
+ * @returns Action plan with sanitized `estimatedImpact` fields across all four sections.
+ */
+export function sanitizeActionPlanImpact(plan: ActionPlan, language: Language): ActionPlan {
+  return {
+    ...plan,
+    dailyRoutine: cleanItems(plan.dailyRoutine, language),
+    indoorAirHacks: cleanItems(plan.indoorAirHacks, language),
+    sustainableAlternatives: cleanItems(plan.sustainableAlternatives, language),
+    healthProtection: cleanItems(plan.healthProtection, language),
+  };
+}
+
+/**
+ * Computes conservative, order-independent weekly CO2 savings (grams) and combined PM2.5 exposure reduction (%).
+ * Applies diminishing returns across overlapping actions (`IMPACT_DIMINISHING_FACTOR`) and caps total
+ * reduction at `MAX_COMBINED_PM25_REDUCTION_PERCENT` (65%).
  *
  * @param selectedChoices - List of selected weekly impact action identifiers.
  * @returns Approximate weekly {@link ImpactEstimate} across CO2 and PM2.5 exposure.
  */
 export function calculateWeeklyImpact(selectedChoices: readonly ImpactChoiceId[]): ImpactEstimate {
   const uniqueIds = Array.from(new Set(selectedChoices));
+  const selectedDefs = uniqueIds
+    .map((id) => IMPACT_CHOICES.find((item) => item.id === id))
+    .filter((def): def is (typeof IMPACT_CHOICES)[number] => Boolean(def))
+    .sort((a, b) => b.approxPm25ReductionFraction - a.approxPm25ReductionFraction);
+
   let totalCo2Grams = 0;
   let remainingExposureFraction = 1;
 
-  for (const choiceId of uniqueIds) {
-    const def = IMPACT_CHOICES.find((item) => item.id === choiceId);
-    if (!def) {
-      continue;
-    }
+  selectedDefs.forEach((def, index) => {
     totalCo2Grams += def.approxCo2SavedGramsPerWeek;
-    remainingExposureFraction *= 1 - def.approxPm25ReductionFraction;
-  }
+    const effectiveFraction =
+      def.approxPm25ReductionFraction * Math.pow(IMPACT_DIMINISHING_FACTOR, index);
+    remainingExposureFraction *= 1 - effectiveFraction;
+  });
 
   const rawReductionPercent = Math.round((1 - remainingExposureFraction) * 100);
   const cappedReductionPercent = Math.min(

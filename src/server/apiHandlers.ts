@@ -10,28 +10,39 @@ import {
 import { z } from 'zod';
 import {
   API_TIMEOUT_MS,
+  AQI_CACHE_TTL_MS,
   GEMINI_FALLBACK_MODEL,
   GEMINI_MODEL,
   MAX_CHAT_HISTORY_MESSAGES,
   MAX_FREE_TEXT_LENGTH,
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
+  REVERSE_GEOCODE_CACHE_TTL_MS,
+  SERVER_GEMINI_TOTAL_TIMEOUT_MS,
 } from '../constants/index.ts';
-import type { Language } from '../types/index.ts';
-import { extractSafeErrorDiagnostics } from '../utils/errorDiagnostics.ts';
+import type { ApiErrorCategory, Language } from '../types/index.ts';
+import { TtlCache, buildAqiCacheKey } from '../utils/cache.ts';
+import {
+  classifyUpstreamError,
+  extractSafeErrorDiagnostics,
+  getLocalizedApiErrorMessage,
+} from '../utils/errorDiagnostics.ts';
 import {
   buildOpenMeteoAqiUrl,
   buildOpenMeteoGeocodingUrl,
+  buildReverseGeocodingUrl,
   createLinkedTimeoutController,
 } from '../utils/network.ts';
 import {
   buildChatSystemInstruction,
   buildChatUserPrompt,
+  buildPlanRepairUserPrompt,
   buildPlanSystemInstruction,
   buildPlanUserPrompt,
 } from '../utils/promptBuilder.ts';
 import { SlidingWindowRateLimiter } from '../utils/rateLimiter.ts';
 import {
+  actionPlanSchema,
   lifestyleProfileSchema,
   sanitizeTextInput,
   validateCityQuery,
@@ -52,8 +63,90 @@ export type ServerApiResponse = ServerResponse;
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_TRACKED_IPS = 500;
+const BASE_RETRY_DELAY_MS = 250;
 
 const rateLimitersByIp = new Map<string, SlidingWindowRateLimiter>();
+const geocodeCache = new TtlCache<unknown>(AQI_CACHE_TTL_MS, 100);
+const aqiCache = new TtlCache<unknown>(AQI_CACHE_TTL_MS, 100);
+const reverseGeocodeCache = new TtlCache<{
+  resolved: boolean;
+  name: string | null;
+  admin1: string;
+  country: string;
+}>(REVERSE_GEOCODE_CACHE_TTL_MS, 100);
+
+class PayloadTooLargeError extends Error {
+  constructor() {
+    super('Request payload exceeds limit.');
+    this.name = 'PayloadTooLargeError';
+  }
+}
+
+class UnsupportedMediaTypeError extends Error {
+  constructor() {
+    super('Content-Type must be application/json.');
+    this.name = 'UnsupportedMediaTypeError';
+  }
+}
+
+/**
+ * Dependency-injection overrides intended purely for unit/integration testing of retry,
+ * fallback, and error classification paths without touching production behavior.
+ */
+export interface ServerAiTestOverrides {
+  aiClient?: Pick<GoogleGenAI, 'models'>;
+  retryDelayBaseMs?: number;
+  totalTimeoutMs?: number;
+}
+
+let aiTestOverrides: ServerAiTestOverrides | null = null;
+
+/**
+ * Registers or clears test overrides for server Gemini calls (testing only).
+ *
+ * @param overrides - Mock `@google/genai` models object and fast retry timings, or `null` to reset.
+ */
+export function setServerAiTestOverrides(overrides: ServerAiTestOverrides | null): void {
+  aiTestOverrides = overrides;
+}
+
+/**
+ * Clears server-side geocode, AQI, and reverse-geocode TTL caches (intended for tests).
+ */
+export function resetServerCaches(): void {
+  geocodeCache.clear();
+  aqiCache.clear();
+  reverseGeocodeCache.clear();
+}
+
+/**
+ * Resets all server-side per-IP sliding-window rate limiters (intended for tests).
+ */
+export function resetServerRateLimiter(): void {
+  rateLimitersByIp.clear();
+}
+
+/**
+ * Returns the configured primary Gemini model name from `GEMINI_MODEL` or the public default.
+ */
+export function getPrimaryGeminiModel(): string {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  return configured || GEMINI_MODEL;
+}
+
+/**
+ * Returns ordered unique Gemini model candidates for primary execution and automatic fallback.
+ */
+export function getGeminiModelCandidates(): string[] {
+  const primary = getPrimaryGeminiModel();
+  const secondary = process.env.GEMINI_FALLBACK_MODEL?.trim() || GEMINI_FALLBACK_MODEL;
+  return Array.from(new Set([primary, secondary, GEMINI_MODEL, GEMINI_FALLBACK_MODEL]));
+}
+
+function hasConfiguredGeminiKey(): boolean {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  return Boolean(apiKey && apiKey !== 'MY_GEMINI_API_KEY');
+}
 
 function getClientIp(req: ServerApiRequest): string {
   const forwarded = req.headers?.['x-forwarded-for'];
@@ -83,15 +176,6 @@ function consumePerIpRateLimit(req: ServerApiRequest) {
   return limiter.consume();
 }
 
-/**
- * Resets all server-side per-IP sliding-window rate limiters (intended for unit/integration tests).
- */
-export function resetServerRateLimiter(): void {
-  rateLimitersByIp.clear();
-}
-
-const MODEL_CANDIDATES = Array.from(new Set([GEMINI_MODEL, GEMINI_FALLBACK_MODEL]));
-
 const recommendationItemGeminiSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -106,7 +190,8 @@ const recommendationItemGeminiSchema: Schema = {
     },
     estimatedImpact: {
       type: Type.STRING,
-      description: 'Approximate PM2.5 exposure reduction or CO2 saved, marked as approximate.',
+      description:
+        'Approximate PM2.5 reduction or CO2 saved without repeating the word Approximate.',
     },
     timeWindow: { type: Type.STRING, description: 'Optional recommended or avoided time window.' },
   },
@@ -156,6 +241,8 @@ const safetySettings = [
 
 const planRequestSchema = z.object({
   language: z.enum(['en', 'hi']),
+  stream: z.boolean().optional(),
+  repairPreviousMalformed: z.string().max(2500).optional(),
   location: z.object({
     id: z.string().max(120),
     name: z.string().min(1).max(120),
@@ -193,6 +280,7 @@ const planRequestSchema = z.object({
 
 const chatRequestSchema = z.object({
   language: z.enum(['en', 'hi']),
+  stream: z.boolean().optional(),
   message: z.string().min(1).max(MAX_FREE_TEXT_LENGTH),
   history: z
     .array(
@@ -212,16 +300,32 @@ const chatRequestSchema = z.object({
   }),
 });
 
+const bigDataCloudResponseSchema = z.object({
+  city: z.string().optional().default(''),
+  locality: z.string().optional().default(''),
+  principalSubdivision: z.string().optional().default(''),
+  countryName: z.string().optional().default(''),
+});
+
+function setSecurityHeaders(res: ServerApiResponse): void {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+}
+
 function sendJson(
   res: ServerApiResponse,
   statusCode: number,
   payload: unknown,
   cacheControl?: string,
 ): void {
+  if (res.writableEnded) {
+    return;
+  }
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
+  setSecurityHeaders(res);
   if (cacheControl) {
     res.setHeader('Cache-Control', cacheControl);
   }
@@ -242,15 +346,43 @@ function getQueryParam(req: ServerApiRequest, key: string): string {
   return url.searchParams.get(key) ?? '';
 }
 
+function checkPostContentType(req: ServerApiRequest): void {
+  const rawType = req.headers?.['content-type'];
+  if (!rawType) {
+    return;
+  }
+  const normalized = Array.isArray(rawType) ? rawType[0] : rawType;
+  if (!normalized.toLowerCase().includes('application/json')) {
+    throw new UnsupportedMediaTypeError();
+  }
+}
+
 async function readJsonBody(req: ServerApiRequest): Promise<unknown> {
+  checkPostContentType(req);
+
   if (req.body !== undefined && req.body !== null) {
     if (typeof req.body === 'string') {
-      return JSON.parse(req.body);
+      if (Buffer.byteLength(req.body, 'utf-8') > MAX_BODY_BYTES) {
+        throw new PayloadTooLargeError();
+      }
+      return req.body.trim() ? JSON.parse(req.body) : {};
     }
     if (Buffer.isBuffer(req.body)) {
-      return JSON.parse(req.body.toString('utf-8'));
+      if (req.body.length > MAX_BODY_BYTES) {
+        throw new PayloadTooLargeError();
+      }
+      const text = req.body.toString('utf-8').trim();
+      return text ? JSON.parse(text) : {};
+    }
+    const serialized = JSON.stringify(req.body);
+    if (Buffer.byteLength(serialized, 'utf-8') > MAX_BODY_BYTES) {
+      throw new PayloadTooLargeError();
     }
     return req.body;
+  }
+
+  if (req.readableEnded) {
+    return {};
   }
 
   return new Promise((resolve, reject) => {
@@ -261,8 +393,10 @@ async function readJsonBody(req: ServerApiRequest): Promise<unknown> {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : chunk;
       totalBytes += buf.length;
       if (totalBytes > MAX_BODY_BYTES) {
-        reject(new Error('Request payload exceeds limit.'));
-        req.destroy();
+        reject(new PayloadTooLargeError());
+        if (typeof req.destroy === 'function') {
+          req.destroy();
+        }
         return;
       }
       chunks.push(buf);
@@ -290,23 +424,30 @@ function enforceHttpMethod(
   if (method === 'OPTIONS') {
     res.statusCode = 204;
     res.setHeader('Allow', `${allowedMethod}, OPTIONS`);
+    setSecurityHeaders(res);
     res.end();
     return false;
   }
   if (method !== allowedMethod) {
     res.setHeader('Allow', `${allowedMethod}, OPTIONS`);
-    sendJson(res, 405, { error: `Method ${method} not allowed.` });
+    sendJson(res, 405, {
+      error: `Method ${method} not allowed.`,
+      category: 'bad_request' satisfies ApiErrorCategory,
+    });
     return false;
   }
   return true;
 }
 
-function createGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+function createGeminiClient(): Pick<GoogleGenAI, 'models'> | null {
+  if (aiTestOverrides?.aiClient) {
+    return aiTestOverrides.aiClient;
+  }
+  if (!hasConfiguredGeminiKey()) {
     return null;
   }
-  return new GoogleGenAI({
+  const apiKey = process.env.GEMINI_API_KEY!.trim();
+  const client = new GoogleGenAI({
     apiKey,
     httpOptions: {
       headers: {
@@ -314,98 +455,229 @@ function createGeminiClient(): GoogleGenAI | null {
       },
     },
   });
+  return client.models ? { models: client.models } : null;
 }
 
 function writeSseEvent(res: ServerApiResponse, payload: Record<string, unknown>): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-async function delayMs(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, ms);
+async function delayWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => {
+      globalThis.clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    const timer = globalThis.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
-async function generateStreamWithFallback(
-  ai: GoogleGenAI,
-  params: {
-    contents: string;
-    systemInstruction: string;
-    responseSchema?: Schema;
-  },
-): Promise<AsyncIterable<{ text?: string }>> {
-  const config = {
-    systemInstruction: params.systemInstruction,
+function buildModelConfig(
+  model: string,
+  systemInstruction: string,
+  responseSchema: Schema | undefined,
+  abortSignal: AbortSignal,
+) {
+  const isGemini3Or4 = /^gemini-[34]/i.test(model);
+  return {
+    systemInstruction,
     safetySettings,
-    thinkingConfig: {
-      thinkingLevel: ThinkingLevel.LOW,
-    },
-    ...(params.responseSchema
+    abortSignal,
+    ...(isGemini3Or4
+      ? {
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.LOW,
+          },
+        }
+      : {
+          temperature: 0.25,
+          maxOutputTokens: responseSchema ? 2800 : 1200,
+        }),
+    ...(responseSchema
       ? {
           responseMimeType: 'application/json',
-          responseSchema: params.responseSchema,
+          responseSchema,
         }
       : {}),
   };
+}
 
+interface FirstChunkStreamResult {
+  firstChunk: string;
+  iterator: AsyncIterator<{ text?: string }>;
+  model: string;
+}
+
+async function openValidatedStreamWithRetry(
+  ai: Pick<GoogleGenAI, 'models'>,
+  params: {
+    routeLabel: '/api/plan' | '/api/chat';
+    contents: string;
+    systemInstruction: string;
+    responseSchema?: Schema;
+    signal: AbortSignal;
+  },
+): Promise<FirstChunkStreamResult> {
+  const baseDelay = aiTestOverrides?.retryDelayBaseMs ?? BASE_RETRY_DELAY_MS;
+  const models = getGeminiModelCandidates();
   let lastError: unknown;
-  const attemptDiagnostics: Array<{
-    model: string;
-    attempt: number;
-    errorType: string;
-    status: string | number;
-  }> = [];
 
-  for (const model of MODEL_CANDIDATES) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (params.signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       try {
-        return await ai.models.generateContentStream({
+        const stream = await ai.models.generateContentStream({
           model,
           contents: params.contents,
-          config,
+          config: buildModelConfig(
+            model,
+            params.systemInstruction,
+            params.responseSchema,
+            params.signal,
+          ),
         });
+        const iterator = stream[Symbol.asyncIterator]();
+        let firstChunk = '';
+        while (true) {
+          const next = await iterator.next();
+          if (next.done) {
+            break;
+          }
+          if (next.value?.text) {
+            firstChunk = next.value.text;
+            break;
+          }
+        }
+        if (!firstChunk) {
+          throw new Error('Empty stream response from Gemini.');
+        }
+        return { firstChunk, iterator, model };
       } catch (err: unknown) {
         lastError = err;
-        const diag = extractSafeErrorDiagnostics(err);
-        attemptDiagnostics.push({
+        const { category, httpStatus, retryable } = classifyUpstreamError(err);
+        console.error(`[SafeAir Saathi] ${params.routeLabel} stream attempt failed:`, {
           model,
           attempt: attempt + 1,
-          errorType: diag.errorType,
-          status: diag.status,
+          category,
+          status: httpStatus,
         });
 
-        const isNotFound = diag.status === 404 || diag.message.includes('404');
-        const isTransient =
-          diag.status === 503 || diag.status === 429 || diag.message.includes('UNAVAILABLE');
-
-        if (isNotFound) {
+        if (category === 'invalid_key' || category === 'bad_request') {
+          throw err;
+        }
+        if (category === 'model_unavailable') {
           break;
         }
-        if (isTransient && attempt === 0) {
-          await delayMs(500);
+        if (retryable && attempt < 2) {
+          const jitter = Math.floor(Math.random() * Math.max(1, Math.round(baseDelay * 0.4)));
+          const waitMs = baseDelay * Math.pow(2, attempt) + jitter;
+          await delayWithAbort(waitMs, params.signal);
           continue;
         }
-        if (isTransient) {
-          break;
-        }
-        throw err;
+        break;
       }
     }
   }
 
-  console.error('[SafeAir Saathi] All Gemini model attempts failed:', {
-    attempts: attemptDiagnostics,
-  });
-  throw lastError;
+  throw lastError ?? new Error('All Gemini model attempts failed.');
 }
 
-async function streamGeminiSseResponse(
+async function generateNonStreamingWithRetry(
+  ai: Pick<GoogleGenAI, 'models'>,
+  params: {
+    routeLabel: '/api/plan' | '/api/chat';
+    contents: string;
+    systemInstruction: string;
+    responseSchema?: Schema;
+    signal: AbortSignal;
+  },
+): Promise<{ text: string; model: string }> {
+  const baseDelay = aiTestOverrides?.retryDelayBaseMs ?? BASE_RETRY_DELAY_MS;
+  const models = getGeminiModelCandidates();
+  let lastError: unknown;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (params.signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: buildModelConfig(
+            model,
+            params.systemInstruction,
+            params.responseSchema,
+            params.signal,
+          ),
+        });
+        const text = (response.text ?? '').trim();
+        if (!text) {
+          throw new Error('Empty response from Gemini.');
+        }
+        return { text, model };
+      } catch (err: unknown) {
+        lastError = err;
+        const { category, httpStatus, retryable } = classifyUpstreamError(err);
+        console.error(`[SafeAir Saathi] ${params.routeLabel} generateContent attempt failed:`, {
+          model,
+          attempt: attempt + 1,
+          category,
+          status: httpStatus,
+        });
+
+        if (category === 'invalid_key' || category === 'bad_request') {
+          throw err;
+        }
+        if (category === 'model_unavailable') {
+          break;
+        }
+        if (retryable && attempt < 2) {
+          const jitter = Math.floor(Math.random() * Math.max(1, Math.round(baseDelay * 0.4)));
+          const waitMs = baseDelay * Math.pow(2, attempt) + jitter;
+          await delayWithAbort(waitMs, params.signal);
+          continue;
+        }
+        break;
+      }
+    }
+  }
+
+  throw lastError ?? new Error('All Gemini non-streaming attempts failed.');
+}
+
+function tryParseValidPlanJson(rawText: string): string | null {
+  const cleaned = rawText
+    .replace(/^```json\s*/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    const validated = actionPlanSchema.safeParse(parsed);
+    return validated.success ? JSON.stringify(validated.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleGeminiResponse(
+  req: ServerApiRequest,
   res: ServerApiResponse,
   options: {
     routeLabel: '/api/plan' | '/api/chat';
+    contextType: 'plan' | 'chat';
     language: Language;
-    missingKeyError: Record<Language, string>;
-    streamError: Record<Language, string>;
+    preferNonStreaming: boolean;
     contents: string;
     systemInstruction: string;
     responseSchema?: Schema;
@@ -413,44 +685,143 @@ async function streamGeminiSseResponse(
 ): Promise<void> {
   const ai = createGeminiClient();
   if (!ai) {
-    console.error(`[SafeAir Saathi] ${options.routeLabel} missing GEMINI_API_KEY configuration.`);
-    sendJson(res, 503, { error: options.missingKeyError[options.language] });
+    console.error(`[SafeAir Saathi] ${options.routeLabel} unavailable:`, {
+      category: 'missing_key',
+      status: 503,
+    });
+    sendJson(res, 503, {
+      error: getLocalizedApiErrorMessage('missing_key', options.language, options.contextType),
+      category: 'missing_key' satisfies ApiErrorCategory,
+    });
     return;
   }
 
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  if (typeof res.flushHeaders === 'function') {
-    res.flushHeaders();
-  }
+  const totalBudget = aiTestOverrides?.totalTimeoutMs ?? SERVER_GEMINI_TOTAL_TIMEOUT_MS;
+  const { controller, cleanup } = createLinkedTimeoutController(totalBudget);
+
+  const onReqClose = (): void => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  req.on?.('close', onReqClose);
 
   try {
-    const stream = await generateStreamWithFallback(ai, {
+    if (!options.preferNonStreaming) {
+      try {
+        const streamResult = await openValidatedStreamWithRetry(ai, {
+          routeLabel: options.routeLabel,
+          contents: options.contents,
+          systemInstruction: options.systemInstruction,
+          responseSchema: options.responseSchema,
+          signal: controller.signal,
+        });
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        setSecurityHeaders(res);
+        if (typeof res.flushHeaders === 'function') {
+          res.flushHeaders();
+        }
+
+        writeSseEvent(res, { chunk: streamResult.firstChunk, model: streamResult.model });
+
+        try {
+          while (true) {
+            const step = await streamResult.iterator.next();
+            if (step.done) {
+              break;
+            }
+            if (step.value?.text) {
+              writeSseEvent(res, { chunk: step.value.text });
+            }
+          }
+          writeSseEvent(res, { done: true, model: streamResult.model });
+        } catch (midStreamErr: unknown) {
+          const { category, httpStatus } = classifyUpstreamError(midStreamErr);
+          const diag = extractSafeErrorDiagnostics(midStreamErr);
+          console.error(`[SafeAir Saathi] ${options.routeLabel} mid-stream failure:`, {
+            category,
+            status: httpStatus,
+          });
+          writeSseEvent(res, {
+            error: getLocalizedApiErrorMessage(category, options.language, options.contextType),
+            category,
+            errorType: diag.errorType,
+          });
+        } finally {
+          res.end();
+        }
+        return;
+      } catch (streamStartErr: unknown) {
+        const { category } = classifyUpstreamError(streamStartErr);
+        // If auth/request/timeout caused pre-stream failure, surface cleanly without wasting extra call;
+        // otherwise fall back automatically to non-streaming JSON generation.
+        if (category === 'invalid_key' || category === 'bad_request' || controller.signal.aborted) {
+          throw streamStartErr;
+        }
+      }
+    }
+
+    // Non-streaming JSON fallback (or explicit non-streaming request)
+    const generated = await generateNonStreamingWithRetry(ai, {
+      routeLabel: options.routeLabel,
       contents: options.contents,
       systemInstruction: options.systemInstruction,
       responseSchema: options.responseSchema,
+      signal: controller.signal,
     });
 
-    for await (const chunk of stream) {
-      if (chunk.text) {
-        writeSseEvent(res, { chunk: chunk.text });
+    if (options.contextType === 'plan') {
+      let validPlanJson = tryParseValidPlanJson(generated.text);
+      if (!validPlanJson) {
+        const repair = await generateNonStreamingWithRetry(ai, {
+          routeLabel: options.routeLabel,
+          contents: buildPlanRepairUserPrompt(generated.text, options.language),
+          systemInstruction: options.systemInstruction,
+          responseSchema: options.responseSchema,
+          signal: controller.signal,
+        });
+        validPlanJson = tryParseValidPlanJson(repair.text);
       }
+
+      if (!validPlanJson) {
+        sendJson(res, 502, {
+          error: getLocalizedApiErrorMessage('upstream_error', options.language, 'plan'),
+          category: 'upstream_error' satisfies ApiErrorCategory,
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        text: validPlanJson,
+        model: generated.model,
+        nonStreaming: true,
+      });
+      return;
     }
-    writeSseEvent(res, { done: true });
+
+    sendJson(res, 200, {
+      text: generated.text,
+      model: generated.model,
+      nonStreaming: true,
+    });
   } catch (err: unknown) {
-    const diag = extractSafeErrorDiagnostics(err);
-    console.error(`[SafeAir Saathi] ${options.routeLabel} Gemini error:`, diag);
-    writeSseEvent(res, {
-      error: options.streamError[options.language],
-      errorType: diag.errorType,
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error(`[SafeAir Saathi] ${options.routeLabel} failed:`, {
+      category,
+      status: httpStatus,
+    });
+    sendJson(res, httpStatus, {
+      error: getLocalizedApiErrorMessage(category, options.language, options.contextType),
+      category,
     });
   } finally {
-    res.end();
+    req.off?.('close', onReqClose);
+    cleanup();
   }
 }
 
@@ -458,23 +829,68 @@ async function proxyOpenMeteoJson(
   res: ServerApiResponse,
   targetUrl: string,
   routeLabel: '/api/geocode' | '/api/aqi',
+  cache: TtlCache<unknown>,
+  cacheKey: string,
   upstreamFailMessage: string,
   unreachableMessage: string,
 ): Promise<void> {
+  const cached = cache.get(cacheKey);
+  if (cached !== undefined) {
+    sendJson(res, 200, cached, 'public, s-maxage=300, stale-while-revalidate=60');
+    return;
+  }
+
   const { controller, cleanup } = createLinkedTimeoutController(API_TIMEOUT_MS);
   try {
     const upstream = await fetch(targetUrl, { signal: controller.signal });
     if (!upstream.ok) {
-      sendJson(res, upstream.status, { error: upstreamFailMessage });
+      const status = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502;
+      console.error(`[SafeAir Saathi] ${routeLabel} upstream status:`, { status });
+      sendJson(res, status, { error: upstreamFailMessage, category: 'upstream_error' });
       return;
     }
     const data: unknown = await upstream.json();
+    cache.set(cacheKey, data);
     sendJson(res, 200, data, 'public, s-maxage=300, stale-while-revalidate=60');
   } catch (err: unknown) {
-    console.error(`[SafeAir Saathi] ${routeLabel} error:`, extractSafeErrorDiagnostics(err));
-    sendJson(res, 502, { error: unreachableMessage });
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error(`[SafeAir Saathi] ${routeLabel} failed:`, { category, status: httpStatus });
+    sendJson(res, httpStatus, { error: unreachableMessage, category });
   } finally {
     cleanup();
+  }
+}
+
+/**
+ * Shared handler for `GET /api/health` exposing configuration and runtime readiness without secrets.
+ *
+ * @param req - Incoming HTTP request.
+ * @param res - Outgoing HTTP JSON response.
+ */
+export async function handleHealthRequest(
+  req: ServerApiRequest,
+  res: ServerApiResponse,
+): Promise<void> {
+  try {
+    if (!enforceHttpMethod(req, res, 'GET')) {
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        keyConfigured: hasConfiguredGeminiKey(),
+        model: getPrimaryGeminiModel(),
+        runtime: 'nodejs',
+        time: new Date().toISOString(),
+      },
+      'no-store',
+    );
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/health failed:', { category, status: httpStatus });
+    sendJson(res, 500, { ok: false, error: 'Health check error.' }, 'no-store');
   }
 }
 
@@ -488,23 +904,121 @@ export async function handleGeocodeRequest(
   req: ServerApiRequest,
   res: ServerApiResponse,
 ): Promise<void> {
-  if (!enforceHttpMethod(req, res, 'GET')) {
-    return;
-  }
-  const rawQuery = getQueryParam(req, 'name');
-  const { valid, sanitized } = validateCityQuery(rawQuery);
-  if (!valid) {
-    sendJson(res, 400, { error: 'Invalid city search query.' });
-    return;
-  }
+  try {
+    if (!enforceHttpMethod(req, res, 'GET')) {
+      return;
+    }
+    const rawQuery = getQueryParam(req, 'name');
+    const { valid, sanitized } = validateCityQuery(rawQuery);
+    if (!valid) {
+      sendJson(res, 400, { error: 'Invalid city search query.', category: 'bad_request' });
+      return;
+    }
 
-  await proxyOpenMeteoJson(
-    res,
-    buildOpenMeteoGeocodingUrl(sanitized),
-    '/api/geocode',
-    'Upstream geocoding failed.',
-    'Unable to reach geocoding service.',
-  );
+    await proxyOpenMeteoJson(
+      res,
+      buildOpenMeteoGeocodingUrl(sanitized),
+      '/api/geocode',
+      geocodeCache,
+      sanitized.toLowerCase(),
+      'Upstream geocoding failed.',
+      'Unable to reach geocoding service.',
+    );
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/geocode unhandled:', { category, status: httpStatus });
+    sendJson(res, httpStatus, { error: 'Unable to process geocoding request.', category });
+  }
+}
+
+/**
+ * Shared handler for `GET /api/reverse-geocode` resolving coordinates to a city/locality name
+ * via a free no-key provider with caching and graceful degradation.
+ *
+ * @param req - Incoming HTTP request with `latitude`, `longitude`, and optional `language`.
+ * @param res - Outgoing HTTP JSON response with resolved place metadata.
+ */
+export async function handleReverseGeocodeRequest(
+  req: ServerApiRequest,
+  res: ServerApiResponse,
+): Promise<void> {
+  try {
+    if (!enforceHttpMethod(req, res, 'GET')) {
+      return;
+    }
+    const latParam = getQueryParam(req, 'latitude');
+    const lonParam = getQueryParam(req, 'longitude');
+    const langParam = getQueryParam(req, 'language') === 'hi' ? 'hi' : 'en';
+    const lat = latParam ? Number(latParam) : Number.NaN;
+    const lon = lonParam ? Number(lonParam) : Number.NaN;
+
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      sendJson(res, 400, { error: 'Invalid coordinates.', category: 'bad_request' });
+      return;
+    }
+
+    const cacheKey = `${buildAqiCacheKey(lat, lon)}:${langParam}`;
+    const cached = reverseGeocodeCache.get(cacheKey);
+    if (cached) {
+      sendJson(res, 200, cached, 'public, s-maxage=3600, stale-while-revalidate=600');
+      return;
+    }
+
+    const { controller, cleanup } = createLinkedTimeoutController(API_TIMEOUT_MS);
+    try {
+      const upstream = await fetch(buildReverseGeocodingUrl(lat, lon, langParam), {
+        signal: controller.signal,
+      });
+      if (!upstream.ok) {
+        sendJson(res, 200, { resolved: false, name: null, admin1: '', country: '' });
+        return;
+      }
+      const raw: unknown = await upstream.json();
+      const parsed = bigDataCloudResponseSchema.safeParse(raw);
+      if (!parsed.success) {
+        sendJson(res, 200, { resolved: false, name: null, admin1: '', country: '' });
+        return;
+      }
+      const primaryName =
+        sanitizeTextInput(parsed.data.locality || parsed.data.city, 120) ||
+        sanitizeTextInput(parsed.data.principalSubdivision, 120);
+      const admin1 = sanitizeTextInput(parsed.data.principalSubdivision, 120);
+      const country = sanitizeTextInput(parsed.data.countryName, 120);
+      const payload = {
+        resolved: Boolean(primaryName),
+        name: primaryName || null,
+        admin1: admin1 === primaryName ? '' : admin1,
+        country,
+      };
+      if (payload.resolved) {
+        reverseGeocodeCache.set(cacheKey, payload);
+      }
+      sendJson(res, 200, payload, 'public, s-maxage=3600, stale-while-revalidate=600');
+    } catch (err: unknown) {
+      const { category, httpStatus } = classifyUpstreamError(err);
+      console.error('[SafeAir Saathi] /api/reverse-geocode failed:', {
+        category,
+        status: httpStatus,
+      });
+      sendJson(res, 200, { resolved: false, name: null, admin1: '', country: '' });
+    } finally {
+      cleanup();
+    }
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/reverse-geocode unhandled:', {
+      category,
+      status: httpStatus,
+    });
+    sendJson(res, 200, { resolved: false, name: null, admin1: '', country: '' });
+  }
 }
 
 /**
@@ -517,139 +1031,220 @@ export async function handleAqiRequest(
   req: ServerApiRequest,
   res: ServerApiResponse,
 ): Promise<void> {
-  if (!enforceHttpMethod(req, res, 'GET')) {
-    return;
-  }
-  const latParam = getQueryParam(req, 'latitude');
-  const lonParam = getQueryParam(req, 'longitude');
-  const lat = latParam ? Number(latParam) : Number.NaN;
-  const lon = lonParam ? Number(lonParam) : Number.NaN;
+  try {
+    if (!enforceHttpMethod(req, res, 'GET')) {
+      return;
+    }
+    const latParam = getQueryParam(req, 'latitude');
+    const lonParam = getQueryParam(req, 'longitude');
+    const lat = latParam ? Number(latParam) : Number.NaN;
+    const lon = lonParam ? Number(lonParam) : Number.NaN;
 
-  if (
-    !Number.isFinite(lat) ||
-    !Number.isFinite(lon) ||
-    lat < -90 ||
-    lat > 90 ||
-    lon < -180 ||
-    lon > 180
-  ) {
-    sendJson(res, 400, { error: 'Invalid coordinates.' });
-    return;
-  }
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lon) ||
+      lat < -90 ||
+      lat > 90 ||
+      lon < -180 ||
+      lon > 180
+    ) {
+      sendJson(res, 400, { error: 'Invalid coordinates.', category: 'bad_request' });
+      return;
+    }
 
-  await proxyOpenMeteoJson(
-    res,
-    buildOpenMeteoAqiUrl(lat, lon),
-    '/api/aqi',
-    'Upstream air quality lookup failed.',
-    'Unable to reach air quality service.',
-  );
+    await proxyOpenMeteoJson(
+      res,
+      buildOpenMeteoAqiUrl(lat, lon),
+      '/api/aqi',
+      aqiCache,
+      buildAqiCacheKey(lat, lon),
+      'Upstream air quality lookup failed.',
+      'Unable to reach air quality service.',
+    );
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/aqi unhandled:', { category, status: httpStatus });
+    sendJson(res, httpStatus, { error: 'Unable to fetch air quality.', category });
+  }
 }
 
 /**
- * Shared handler for `POST /api/plan` streaming structured 4-section plans via SSE.
+ * Shared handler for `POST /api/plan` streaming structured 4-section plans via SSE with
+ * automatic non-streaming JSON fallback, retry with backoff, and category-based errors.
  *
  * @param req - Incoming HTTP POST request with location, air quality, profile, and language.
- * @param res - Outgoing HTTP SSE response streaming Gemini JSON chunks.
+ * @param res - Outgoing HTTP SSE or JSON response.
  */
 export async function handlePlanRequest(
   req: ServerApiRequest,
   res: ServerApiResponse,
 ): Promise<void> {
-  if (!enforceHttpMethod(req, res, 'POST')) {
-    return;
-  }
-
-  const rate = consumePerIpRateLimit(req);
-  if (!rate.allowed) {
-    sendJson(res, 429, { error: 'Too many plan requests. Please wait a minute and retry.' });
-    return;
-  }
-
-  let body: unknown;
   try {
-    body = await readJsonBody(req);
-  } catch {
-    sendJson(res, 400, { error: 'Invalid request payload for plan generation.' });
-    return;
-  }
+    if (!enforceHttpMethod(req, res, 'POST')) {
+      return;
+    }
 
-  const parsed = planRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    sendJson(res, 400, { error: 'Invalid request payload for plan generation.' });
-    return;
-  }
+    const rate = consumePerIpRateLimit(req);
+    if (!rate.allowed) {
+      sendJson(res, 429, {
+        error: getLocalizedApiErrorMessage('quota_exceeded', 'en', 'plan'),
+        category: 'quota_exceeded' satisfies ApiErrorCategory,
+      });
+      return;
+    }
 
-  const { location, airQuality, profile, language } = parsed.data;
-  await streamGeminiSseResponse(res, {
-    routeLabel: '/api/plan',
-    language,
-    missingKeyError: {
-      en: 'Gemini AI service is not configured on the server. Using rule-based guidance instead.',
-      hi: 'सर्वर पर जेमिनी एआई सेवा कॉन्फ़िगर नहीं है। नियम-आधारित मार्गदर्शन दिखाया जा रहा है।',
-    },
-    streamError: {
-      en: 'Unable to generate AI plan right now. Showing rule-based guidance instead.',
-      hi: 'AI योजना अभी तैयार नहीं हो सकी। इसके बजाय नियम-आधारित सुरक्षा मार्गदर्शन दिखाया जा रहा है।',
-    },
-    contents: buildPlanUserPrompt(location, airQuality, profile, language),
-    systemInstruction: buildPlanSystemInstruction(language),
-    responseSchema: actionPlanResponseSchema,
-  });
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch (err: unknown) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJson(res, 413, {
+          error: 'Request payload exceeds maximum size.',
+          category: 'bad_request' satisfies ApiErrorCategory,
+        });
+        return;
+      }
+      if (err instanceof UnsupportedMediaTypeError) {
+        sendJson(res, 415, {
+          error: 'Content-Type must be application/json.',
+          category: 'bad_request' satisfies ApiErrorCategory,
+        });
+        return;
+      }
+      sendJson(res, 400, {
+        error: 'Invalid JSON request payload for plan generation.',
+        category: 'bad_request' satisfies ApiErrorCategory,
+      });
+      return;
+    }
+
+    const parsed = planRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: 'Invalid request payload for plan generation.',
+        category: 'bad_request' satisfies ApiErrorCategory,
+      });
+      return;
+    }
+
+    const { location, airQuality, profile, language, stream, repairPreviousMalformed } =
+      parsed.data;
+    const contents = repairPreviousMalformed
+      ? buildPlanRepairUserPrompt(repairPreviousMalformed, language)
+      : buildPlanUserPrompt(location, airQuality, profile, language);
+
+    const acceptHeader = req.headers?.['accept'];
+    const preferNonStreaming =
+      stream === false ||
+      Boolean(repairPreviousMalformed) ||
+      (typeof acceptHeader === 'string' && acceptHeader.includes('application/json'));
+
+    await handleGeminiResponse(req, res, {
+      routeLabel: '/api/plan',
+      contextType: 'plan',
+      language,
+      preferNonStreaming,
+      contents,
+      systemInstruction: buildPlanSystemInstruction(language),
+      responseSchema: actionPlanResponseSchema,
+    });
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/plan unhandled:', { category, status: httpStatus });
+    sendJson(res, httpStatus, {
+      error: getLocalizedApiErrorMessage(category, 'en', 'plan'),
+      category,
+    });
+  }
 }
 
 /**
- * Shared handler for `POST /api/chat` streaming scoped follow-up replies via SSE.
+ * Shared handler for `POST /api/chat` streaming scoped follow-up replies via SSE with
+ * automatic non-streaming JSON fallback and category-based errors.
  *
  * @param req - Incoming HTTP POST request with message, history, context, and language.
- * @param res - Outgoing HTTP SSE response streaming Gemini markdown chunks.
+ * @param res - Outgoing HTTP SSE or JSON response.
  */
 export async function handleChatRequest(
   req: ServerApiRequest,
   res: ServerApiResponse,
 ): Promise<void> {
-  if (!enforceHttpMethod(req, res, 'POST')) {
-    return;
-  }
-
-  const rate = consumePerIpRateLimit(req);
-  if (!rate.allowed) {
-    sendJson(res, 429, { error: 'Too many chat requests. Please wait a minute and retry.' });
-    return;
-  }
-
-  let body: unknown;
   try {
-    body = await readJsonBody(req);
-  } catch {
-    sendJson(res, 400, { error: 'Invalid chat message or context.' });
-    return;
-  }
+    if (!enforceHttpMethod(req, res, 'POST')) {
+      return;
+    }
 
-  const parsed = chatRequestSchema.safeParse(body);
-  if (!parsed.success) {
-    sendJson(res, 400, { error: 'Invalid chat message or context.' });
-    return;
-  }
+    const rate = consumePerIpRateLimit(req);
+    if (!rate.allowed) {
+      sendJson(res, 429, {
+        error: getLocalizedApiErrorMessage('quota_exceeded', 'en', 'chat'),
+        category: 'quota_exceeded' satisfies ApiErrorCategory,
+      });
+      return;
+    }
 
-  const sanitizedMessage = sanitizeTextInput(parsed.data.message, MAX_FREE_TEXT_LENGTH);
-  if (!sanitizedMessage) {
-    sendJson(res, 400, { error: 'Please enter a valid question.' });
-    return;
-  }
+    let body: unknown;
+    try {
+      body = await readJsonBody(req);
+    } catch (err: unknown) {
+      if (err instanceof PayloadTooLargeError) {
+        sendJson(res, 413, {
+          error: 'Request payload exceeds maximum size.',
+          category: 'bad_request' satisfies ApiErrorCategory,
+        });
+        return;
+      }
+      if (err instanceof UnsupportedMediaTypeError) {
+        sendJson(res, 415, {
+          error: 'Content-Type must be application/json.',
+          category: 'bad_request' satisfies ApiErrorCategory,
+        });
+        return;
+      }
+      sendJson(res, 400, {
+        error: 'Invalid JSON chat request payload.',
+        category: 'bad_request' satisfies ApiErrorCategory,
+      });
+      return;
+    }
 
-  await streamGeminiSseResponse(res, {
-    routeLabel: '/api/chat',
-    language: parsed.data.language,
-    missingKeyError: {
-      en: 'Gemini AI chat is currently unavailable because no API key is configured.',
-      hi: 'जेमिनी एआई चैट अभी उपलब्ध नहीं है क्योंकि एपीआई कुंजी कॉन्फ़िगर नहीं है।',
-    },
-    streamError: {
-      en: 'Unable to complete the reply right now. Please try again shortly.',
-      hi: 'अभी उत्तर पूरा नहीं हो सका। कृपया कुछ क्षण बाद पुनः प्रयास करें।',
-    },
-    contents: buildChatUserPrompt(sanitizedMessage, parsed.data.history, parsed.data.context),
-    systemInstruction: buildChatSystemInstruction(parsed.data.language),
-  });
+    const parsed = chatRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      sendJson(res, 400, {
+        error: 'Invalid chat message or context.',
+        category: 'bad_request' satisfies ApiErrorCategory,
+      });
+      return;
+    }
+
+    const sanitizedMessage = sanitizeTextInput(parsed.data.message, MAX_FREE_TEXT_LENGTH);
+    if (!sanitizedMessage) {
+      sendJson(res, 400, {
+        error: 'Please enter a valid question.',
+        category: 'bad_request' satisfies ApiErrorCategory,
+      });
+      return;
+    }
+
+    const acceptHeader = req.headers?.['accept'];
+    const preferNonStreaming =
+      parsed.data.stream === false ||
+      (typeof acceptHeader === 'string' && acceptHeader.includes('application/json'));
+
+    await handleGeminiResponse(req, res, {
+      routeLabel: '/api/chat',
+      contextType: 'chat',
+      language: parsed.data.language,
+      preferNonStreaming,
+      contents: buildChatUserPrompt(sanitizedMessage, parsed.data.history, parsed.data.context),
+      systemInstruction: buildChatSystemInstruction(parsed.data.language),
+    });
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    console.error('[SafeAir Saathi] /api/chat unhandled:', { category, status: httpStatus });
+    sendJson(res, httpStatus, {
+      error: getLocalizedApiErrorMessage(category, 'en', 'chat'),
+      category,
+    });
+  }
 }

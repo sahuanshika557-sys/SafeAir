@@ -10,13 +10,15 @@ interface ImpactCalculatorProps {
 }
 
 /**
- * Interactive weekly impact calculator showing approximate CO2 avoided and PM2.5 exposure reduction.
+ * Interactive weekly impact calculator showing conservative approximate CO2 avoided,
+ * diminishing-returns PM2.5 exposure reduction, and transparent methodology assumptions.
  */
 export const ImpactCalculator = memo(function ImpactCalculator({
   t,
   language,
 }: ImpactCalculatorProps): ReactElement {
   const [selected, setSelected] = useState<ImpactChoiceId[]>(['metro_over_car', 'n95_mask']);
+  const [showAssumptions, setShowAssumptions] = useState<boolean>(false);
 
   const toggleChoice = (id: ImpactChoiceId): void => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
@@ -124,7 +126,45 @@ export const ImpactCalculator = memo(function ImpactCalculator({
         </div>
       </fieldset>
 
-      <p className="text-xs text-slate-600 dark:text-slate-400">{t.impactApproxNote}</p>
+      <div className="space-y-3 pt-1">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-slate-600 dark:text-slate-400">{t.impactApproxNote}</p>
+          <button
+            type="button"
+            aria-expanded={showAssumptions}
+            aria-controls="impact-assumptions-panel"
+            onClick={() => setShowAssumptions((prev) => !prev)}
+            className="min-h-[44px] inline-flex items-center rounded-lg border border-slate-300 dark:border-slate-700 px-3.5 py-2 text-xs font-semibold text-teal-800 dark:text-teal-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          >
+            {t.impactHowWeEstimateTitle}
+          </button>
+        </div>
+
+        {showAssumptions && (
+          <div
+            id="impact-assumptions-panel"
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 text-xs leading-relaxed text-slate-700 dark:text-slate-300 space-y-2"
+          >
+            <p>{t.impactHowWeEstimateBody}</p>
+            <ul className="list-disc pl-5 space-y-1">
+              {IMPACT_CHOICES.map((choice) => {
+                const label = language === 'hi' ? choice.labelHi : choice.labelEn;
+                const desc = language === 'hi' ? choice.descriptionHi : choice.descriptionEn;
+                const singlePct = Math.round(choice.approxPm25ReductionFraction * 100);
+                return (
+                  <li key={choice.id}>
+                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                      {label}:
+                    </span>{' '}
+                    ~{singlePct}% {language === 'hi' ? 'अनुमानित आधार PM2.5 कमी' : 'base PM2.5 drop'}{' '}
+                    · {desc}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </div>
     </section>
   );
 });

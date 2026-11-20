@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { extractSafeErrorDiagnostics } from '../../src/utils/errorDiagnostics.ts';
+import type { ApiErrorCategory } from '../../src/types/index.ts';
+import {
+  classifyUpstreamError,
+  extractSafeErrorDiagnostics,
+  getLocalizedApiErrorMessage,
+} from '../../src/utils/errorDiagnostics.ts';
 
-describe('extractSafeErrorDiagnostics', () => {
+describe('extractSafeErrorDiagnostics & error classification', () => {
   it('extracts errorType, numeric status, and message safely', () => {
     const err = Object.assign(new Error('Model gemini-2.5-flash returned HTTP 404'), {
       name: 'ApiError',
@@ -10,6 +15,7 @@ describe('extractSafeErrorDiagnostics', () => {
     const diag = extractSafeErrorDiagnostics(err);
     expect(diag.errorType).toBe('ApiError');
     expect(diag.status).toBe(404);
+    expect(diag.category).toBe('model_unavailable');
     expect(diag.message).toContain('HTTP 404');
   });
 
@@ -32,5 +38,81 @@ describe('extractSafeErrorDiagnostics', () => {
     expect(unknownDiag.errorType).toBe('UnknownError');
     expect(unknownDiag.status).toBe('ECONNRESET');
     expect(unknownDiag.message).toBe('Unknown failure');
+    expect(unknownDiag.category).toBe('upstream_error');
+  });
+
+  it('classifies upstream errors into stable categories, HTTP codes, and retryable flags', () => {
+    expect(
+      classifyUpstreamError(Object.assign(new Error('API_KEY_INVALID'), { status: 403 })),
+    ).toEqual({
+      category: 'invalid_key',
+      httpStatus: 502,
+      retryable: false,
+    });
+
+    expect(
+      classifyUpstreamError(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 })),
+    ).toEqual({
+      category: 'quota_exceeded',
+      httpStatus: 429,
+      retryable: true,
+    });
+
+    expect(
+      classifyUpstreamError(Object.assign(new Error('Model not found'), { status: 404 })),
+    ).toEqual({
+      category: 'model_unavailable',
+      httpStatus: 503,
+      retryable: true,
+    });
+
+    expect(classifyUpstreamError(new DOMException('Timed out', 'AbortError'))).toEqual({
+      category: 'timeout',
+      httpStatus: 504,
+      retryable: true,
+    });
+
+    expect(
+      classifyUpstreamError(Object.assign(new Error('INVALID_ARGUMENT'), { status: 400 })),
+    ).toEqual({
+      category: 'bad_request',
+      httpStatus: 400,
+      retryable: false,
+    });
+
+    expect(classifyUpstreamError(new Error('Socket hang up'))).toEqual({
+      category: 'upstream_error',
+      httpStatus: 502,
+      retryable: true,
+    });
+  });
+
+  it('produces friendly EN and HI messages for every category without raw HTTP codes', () => {
+    const categories: ApiErrorCategory[] = [
+      'missing_key',
+      'invalid_key',
+      'quota_exceeded',
+      'model_unavailable',
+      'timeout',
+      'bad_request',
+      'upstream_error',
+    ];
+
+    for (const category of categories) {
+      const enPlan = getLocalizedApiErrorMessage(category, 'en', 'plan');
+      const hiPlan = getLocalizedApiErrorMessage(category, 'hi', 'plan');
+      const enChat = getLocalizedApiErrorMessage(category, 'en', 'chat');
+      const hiChat = getLocalizedApiErrorMessage(category, 'hi', 'chat');
+
+      expect(enPlan).toContain('rule-based guidance');
+      expect(hiPlan).toContain('नियम-आधारित');
+      expect(enChat).not.toContain('rule-based');
+      expect(hiChat).toMatch(/[\u0900-\u097F]/);
+
+      for (const msg of [enPlan, hiPlan, enChat, hiChat]) {
+        expect(msg).not.toMatch(/\bHTTP\s*\d{3}\b/i);
+        expect(msg).not.toContain('500');
+      }
+    }
   });
 });

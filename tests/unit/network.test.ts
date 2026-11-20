@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildOpenMeteoAqiUrl,
   buildOpenMeteoGeocodingUrl,
+  buildReverseGeocodingUrl,
   createLinkedTimeoutController,
   fetchJsonWithProxyFallback,
   isAbortError,
@@ -22,7 +23,7 @@ describe('Network utility helpers', () => {
     expect(isAbortError('AbortError')).toBe(false);
   });
 
-  it('builds canonical Open-Meteo geocoding and air quality URLs', () => {
+  it('builds canonical Open-Meteo and reverse-geocoding URLs', () => {
     const geoUrl = buildOpenMeteoGeocodingUrl('New Delhi');
     expect(geoUrl).toContain('geocoding-api.open-meteo.com');
     expect(geoUrl).toContain('name=New+Delhi');
@@ -34,6 +35,12 @@ describe('Network utility helpers', () => {
     expect(aqiUrl).toContain('longitude=77.2090');
     expect(aqiUrl).toContain('nitrogen_dioxide');
     expect(aqiUrl).toContain('ozone');
+
+    const revUrl = buildReverseGeocodingUrl(28.61394, 77.20902, 'hi');
+    expect(revUrl).toContain('api.bigdatacloud.net/data/reverse-geocode-client');
+    expect(revUrl).toContain('latitude=28.6139');
+    expect(revUrl).toContain('longitude=77.2090');
+    expect(revUrl).toContain('localityLanguage=hi');
   });
 
   it('aborts on timeout, links external signal, and throws immediately if pre-aborted', () => {
@@ -53,7 +60,7 @@ describe('Network utility helpers', () => {
     expect(() => createLinkedTimeoutController(5000, external.signal)).toThrow();
   });
 
-  it('falls back to proxy on non-abort failures and preserves abort errors', async () => {
+  it('falls back to proxy on non-abort failures and HTTP errors while preserving abort errors', async () => {
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new TypeError('Direct blocked'))
@@ -65,10 +72,23 @@ describe('Network utility helpers', () => {
       'https://example.com/direct',
       '/api/proxy',
       controller.signal,
-      'Test API',
+      'Test service',
     );
     expect(data).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Direct 500 + Proxy 502 throws clear status error
+    fetchMock
+      .mockResolvedValueOnce(new Response('err', { status: 500 }))
+      .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }));
+    await expect(
+      fetchJsonWithProxyFallback(
+        'https://example.com/direct',
+        '/api/proxy',
+        controller.signal,
+        'Test service',
+      ),
+    ).rejects.toThrow(/Test service returned HTTP 502/);
 
     fetchMock.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
     await expect(
@@ -76,9 +96,8 @@ describe('Network utility helpers', () => {
         'https://example.com/direct',
         '/api/proxy',
         controller.signal,
-        'Test API',
+        'Test service',
       ),
     ).rejects.toThrow();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

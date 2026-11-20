@@ -122,7 +122,26 @@ export interface ActionPlan {
   healthProtection: RecommendationItem[];
   generatedAt: string;
   isFallback: boolean;
+  generatedForLocationId?: string;
+  generatedForLocationName?: string;
+  generatedForAqi?: number;
+  generatedForCategoryKey?: AqiCategoryKey;
+  generatedForLanguage?: Language;
+  generatedForProfile?: LifestyleProfile;
+  modelUsed?: string;
 }
+
+/**
+ * Classified API error categories returned to clients without leaking raw errors or secrets.
+ */
+export type ApiErrorCategory =
+  | 'missing_key'
+  | 'invalid_key'
+  | 'quota_exceeded'
+  | 'model_unavailable'
+  | 'timeout'
+  | 'bad_request'
+  | 'upstream_error';
 
 /**
  * Tab identifiers for the four-section action plan UI.

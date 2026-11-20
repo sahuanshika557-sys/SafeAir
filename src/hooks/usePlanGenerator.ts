@@ -100,7 +100,14 @@ export function usePlanGenerator(): UsePlanGeneratorReturn {
               ? 'अभी AI योजना तैयार नहीं हो सकी। नियम-आधारित मार्गदर्शन दिखाया जा रहा है।'
               : 'Unable to generate AI plan right now. Showing rule-based guidance.';
           setError(err instanceof Error ? err.message : fallbackMsg);
-          setPlan(buildRuleBasedFallbackPlan(params.airQuality, params.profile, params.language));
+          setPlan(
+            buildRuleBasedFallbackPlan(
+              params.airQuality,
+              params.profile,
+              params.language,
+              params.location,
+            ),
+          );
         }
       } finally {
         if (!controller.signal.aborted) {

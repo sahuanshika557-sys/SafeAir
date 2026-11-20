@@ -146,7 +146,6 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
       />,
     );
 
-    // Invalid >500 char notes triggers role="alert" linked by aria-describedby
     const tooLongProfile = { ...DEFAULT_PROFILE, notes: 'a'.repeat(505) };
     rerender(
       <ProfileForm
@@ -163,7 +162,6 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/500/);
     expect(onSubmit).not.toHaveBeenCalled();
 
-    // Valid profile submits cleanly
     rerender(
       <ProfileForm
         t={TRANSLATIONS.en}
@@ -180,25 +178,56 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('renders ActionPlanView tabs, medical disclaimer, error+retry fallback, and passes axe', async () => {
+  it('renders ActionPlanView summary, deduplicated impact text, error+retry, outdated state, focus move, and passes axe', async () => {
     const reading = createManualAirQualityReading(225);
-    const plan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'en');
+    const plan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'en', DEFAULT_LOCATION);
+    // Deliberately inject redundant prefix to test cleanImpactText rendering guard
+    plan.dailyRoutine[0].estimatedImpact = 'Approximate: 25%–40% lower morning intake';
     const onRetry = vi.fn();
+    const onRegenerate = vi.fn();
 
-    const { container } = render(
+    const { container, rerender } = render(
+      <ActionPlanView
+        t={TRANSLATIONS.en}
+        language="en"
+        plan={null}
+        isGenerating={true}
+        streamCharCount={42}
+        error={null}
+        onRetry={onRetry}
+        currentLocation={DEFAULT_LOCATION}
+        currentReading={reading}
+        currentProfile={DEFAULT_PROFILE}
+        onRegenerateForCurrent={onRegenerate}
+      />,
+    );
+
+    // Transitioning isGenerating true -> false moves focus onto the plan container
+    rerender(
       <ActionPlanView
         t={TRANSLATIONS.en}
         language="en"
         plan={plan}
         isGenerating={false}
         streamCharCount={0}
-        error="Temporary Gemini outage"
+        error="Temporary AI outage"
         onRetry={onRetry}
+        currentLocation={DEFAULT_LOCATION}
+        currentReading={reading}
+        currentProfile={DEFAULT_PROFILE}
+        onRegenerateForCurrent={onRegenerate}
       />,
     );
 
     expect(screen.getByText(TRANSLATIONS.en.medicalDisclaimerTitle)).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Temporary Gemini outage');
+    expect(screen.getByText(TRANSLATIONS.en.whyFitsTitle)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Temporary AI outage');
+    expect(document.activeElement).toHaveAttribute('tabindex', '-1');
+
+    // Impact line must NOT duplicate "Approximate:"
+    const impactNode = screen.getByText(/25%–40% lower morning intake/i);
+    expect(impactNode.textContent).not.toMatch(/\(approximate\):\s*Approximate:/i);
+
     await userEvent.click(screen.getByRole('button', { name: /Retry AI Plan/i }));
     expect(onRetry).toHaveBeenCalledTimes(1);
 
@@ -208,11 +237,55 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
     expect(screen.getByText(/Time ventilation strictly to midday/i)).toBeInTheDocument();
 
     expect(await axe(container)).toHaveNoViolations();
+
+    // Changing location or AQI marks the plan outdated, hides stale summary, and shows Regenerate CTA
+    const newLocation = {
+      id: 'city-mumbai',
+      name: 'Mumbai',
+      country: 'India',
+      latitude: 19.076,
+      longitude: 72.8777,
+      source: 'search' as const,
+    };
+    const newReading = createManualAirQualityReading(92);
+
+    rerender(
+      <ActionPlanView
+        t={TRANSLATIONS.en}
+        language="en"
+        plan={plan}
+        isGenerating={false}
+        streamCharCount={0}
+        error={null}
+        onRetry={onRetry}
+        currentLocation={newLocation}
+        currentReading={newReading}
+        currentProfile={DEFAULT_PROFILE}
+        onRegenerateForCurrent={onRegenerate}
+      />,
+    );
+
+    const statusBanner = screen.getByRole('status');
+    expect(statusBanner).toHaveTextContent(/Mumbai, India \(92 US AQI/i);
+    expect(screen.queryByText(plan.summary)).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: TRANSLATIONS.en.regenerateForLocationBtn }),
+    );
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+    expect(await axe(container)).toHaveNoViolations();
   });
 
-  it('renders ImpactCalculator, updates weekly CO2 & PM2.5 estimates on toggle, and passes axe', async () => {
+  it('renders ImpactCalculator with conservative ~35% default, How we estimate toggle, and passes axe', async () => {
     const { container } = render(<ImpactCalculator t={TRANSLATIONS.en} language="en" />);
     expect(screen.getByText(/Approx\. 11\.5 kg CO₂/i)).toBeInTheDocument();
+    expect(screen.getByText(/^~35%$/)).toBeInTheDocument();
+
+    const howBtn = screen.getByRole('button', { name: TRANSLATIONS.en.impactHowWeEstimateTitle });
+    expect(howBtn).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(howBtn);
+    expect(howBtn).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/cap total reduction at 65%/i)).toBeInTheDocument();
 
     const woodCheckbox = screen.getByRole('checkbox', {
       name: /Use Induction \/ Electric or LPG/i,
@@ -260,7 +333,7 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
     );
 
     const reading = createManualAirQualityReading(195);
-    const plan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'en');
+    const plan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'en', DEFAULT_LOCATION);
 
     render(
       <ActionPlanView
@@ -271,6 +344,8 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
         streamCharCount={0}
         error={null}
         onRetry={vi.fn()}
+        currentLocation={DEFAULT_LOCATION}
+        currentReading={reading}
       />,
     );
 

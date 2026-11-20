@@ -1,7 +1,16 @@
-import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis.ts';
 import type { TranslationDictionary } from '../i18n/translations.ts';
-import type { ActionPlan, Language, PlanSectionKey, RecommendationItem } from '../types/index.ts';
+import type {
+  ActionPlan,
+  AirQualityReading,
+  Language,
+  LifestyleProfile,
+  LocationData,
+  PlanSectionKey,
+  RecommendationItem,
+} from '../types/index.ts';
+import { cleanImpactText } from '../utils/impactCalculator.ts';
 import { ShieldIcon, StopIcon, VolumeIcon } from './Icons.tsx';
 
 interface ActionPlanViewProps {
@@ -12,6 +21,10 @@ interface ActionPlanViewProps {
   streamCharCount: number;
   error: string | null;
   onRetry: () => void;
+  currentLocation?: LocationData;
+  currentReading?: AirQualityReading | null;
+  currentProfile?: LifestyleProfile;
+  onRegenerateForCurrent?: () => void;
 }
 
 const SECTION_ORDER: readonly PlanSectionKey[] = [
@@ -21,13 +34,17 @@ const SECTION_ORDER: readonly PlanSectionKey[] = [
   'healthProtection',
 ];
 
-function RecommendationCard({
+const RecommendationCard = memo(function RecommendationCard({
   item,
+  language,
   t,
 }: {
   item: RecommendationItem;
+  language: Language;
   t: TranslationDictionary;
 }): ReactElement {
+  const cleanedImpact = cleanImpactText(item.estimatedImpact, language);
+
   return (
     <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-5 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -48,16 +65,46 @@ function RecommendationCard({
         </p>
         <p className="text-teal-900 dark:text-teal-200 font-medium tabular-nums">
           <span className="font-semibold">{t.estimatedImpactLabel}: </span>
-          {item.estimatedImpact}
+          {cleanedImpact}
         </p>
       </div>
     </article>
   );
+});
+
+function buildWhyFitsSummary(
+  t: TranslationDictionary,
+  language: Language,
+  profile: LifestyleProfile | undefined,
+  locationName: string | undefined,
+  reading: AirQualityReading | null | undefined,
+): string {
+  const parts: string[] = [];
+  if (locationName && reading) {
+    const cat = language === 'hi' ? reading.category.labelHi : reading.category.labelEn;
+    parts.push(`${locationName} (${reading.usAqi} US AQI · ${cat})`);
+  }
+  if (profile) {
+    if (profile.household.length > 0) {
+      parts.push(profile.household.map((g) => t.householdOptions[g]).join(', '));
+    }
+    parts.push(t.commuteOptions[profile.commuteMode]);
+    parts.push(t.workStyleOptions[profile.workStyle]);
+    parts.push(t.homeTypeOptions[profile.homeType]);
+    parts.push(
+      profile.hasAirPurifier
+        ? `${t.purifierLabel} ${t.purifierYes}`
+        : `${t.purifierLabel} ${t.purifierNo}`,
+    );
+    parts.push(t.cookingFuelOptions[profile.cookingFuel]);
+    parts.push(t.budgetOptions[profile.budget]);
+  }
+  return parts.join(' · ');
 }
 
 /**
  * Displays the 4-section personalized plan with WAI-ARIA tabs, streaming skeleton,
- * medical disclaimer, Read Aloud control, and error/fallback states.
+ * stale-plan detection, personalization summary, Read Aloud control, and focus management.
  */
 export function ActionPlanView({
   t,
@@ -67,10 +114,24 @@ export function ActionPlanView({
   streamCharCount,
   error,
   onRetry,
+  currentLocation,
+  currentReading,
+  currentProfile,
+  onRegenerateForCurrent,
 }: ActionPlanViewProps): ReactElement {
   const [activeTab, setActiveTab] = useState<PlanSectionKey>('dailyRoutine');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const planFocusRef = useRef<HTMLDivElement | null>(null);
+  const prevGeneratingRef = useRef<boolean>(isGenerating);
   const { isSupported, isSpeaking, speak, stop } = useSpeechSynthesis();
+
+  useEffect(() => {
+    const wasGenerating = prevGeneratingRef.current;
+    prevGeneratingRef.current = isGenerating;
+    if (wasGenerating && !isGenerating && plan && planFocusRef.current) {
+      planFocusRef.current.focus();
+    }
+  }, [isGenerating, plan]);
 
   const tabLabels: Record<PlanSectionKey, string> = {
     dailyRoutine: t.tabDailyRoutine,
@@ -78,6 +139,36 @@ export function ActionPlanView({
     sustainableAlternatives: t.tabSustainable,
     healthProtection: t.tabHealthProtection,
   };
+
+  const currentPlaceLabel = currentLocation
+    ? currentLocation.id === 'default-new-delhi' && language === 'hi'
+      ? 'नई दिल्ली, भारत'
+      : [currentLocation.name, currentLocation.country].filter(Boolean).join(', ')
+    : undefined;
+
+  const isOutdated = Boolean(
+    plan &&
+    currentReading &&
+    ((plan.generatedForAqi !== undefined && plan.generatedForAqi !== currentReading.usAqi) ||
+      (plan.generatedForLocationId !== undefined &&
+        currentLocation &&
+        plan.generatedForLocationId !== currentLocation.id) ||
+      (plan.generatedForLanguage !== undefined && plan.generatedForLanguage !== language)),
+  );
+
+  const currentCategoryLabel = currentReading
+    ? language === 'hi'
+      ? currentReading.category.labelHi
+      : currentReading.category.labelEn
+    : '';
+
+  const personalizationSummary = buildWhyFitsSummary(
+    t,
+    language,
+    plan?.generatedForProfile ?? currentProfile,
+    currentPlaceLabel,
+    currentReading,
+  );
 
   const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, idx: number): void => {
     let nextIndex: number;
@@ -108,11 +199,11 @@ export function ActionPlanView({
     }
     const items = plan[activeTab];
     const spokenParts = [
-      plan.summary,
+      ...(isOutdated ? [] : [plan.summary]),
       `${tabLabels[activeTab]}.`,
       ...items.map(
         (item) =>
-          `${item.title}. ${item.detail} ${t.whyItHelpsLabel}: ${item.whyItHelps}. ${t.estimatedImpactLabel}: ${item.estimatedImpact}.`,
+          `${item.title}. ${item.detail} ${t.whyItHelpsLabel}: ${item.whyItHelps}. ${t.estimatedImpactLabel}: ${cleanImpactText(item.estimatedImpact, language)}.`,
       ),
     ];
     speak(spokenParts.join(' '), language);
@@ -137,7 +228,7 @@ export function ActionPlanView({
           </p>
         </div>
 
-        {plan && isSupported && (
+        {plan && !isOutdated && isSupported && (
           <button
             type="button"
             onClick={handleReadAloud}
@@ -208,6 +299,31 @@ export function ActionPlanView({
           </div>
         )}
 
+        {isOutdated && !isGenerating && currentReading && (
+          <div
+            role="status"
+            className="rounded-lg border border-amber-400 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/60 p-4 text-amber-950 dark:text-amber-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-5"
+          >
+            <div>
+              <p className="font-semibold">{t.planOutdatedTitle}</p>
+              <p className="text-sm mt-0.5">
+                {t.planOutdatedBody(
+                  currentPlaceLabel ?? '',
+                  currentReading.usAqi,
+                  currentCategoryLabel,
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onRegenerateForCurrent ?? onRetry}
+              className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-teal-800 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-900 dark:bg-teal-700 dark:hover:bg-teal-600 transition-colors whitespace-nowrap shrink-0"
+            >
+              {t.regenerateForLocationBtn}
+            </button>
+          </div>
+        )}
+
         {!isGenerating && !plan && !error && (
           <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center">
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
@@ -219,8 +335,19 @@ export function ActionPlanView({
           </div>
         )}
 
-        {plan && !isGenerating && (
-          <div className="space-y-6">
+        {plan && !isGenerating && !isOutdated && (
+          <div ref={planFocusRef} tabIndex={-1} className="space-y-6 focus:outline-none">
+            {personalizationSummary && (
+              <div className="rounded-lg border border-teal-200 dark:border-teal-800 bg-teal-50/70 dark:bg-teal-950/40 p-4 space-y-1">
+                <p className="text-xs font-bold uppercase tracking-wide text-teal-900 dark:text-teal-200">
+                  {t.whyFitsTitle}
+                </p>
+                <p className="text-sm text-slate-800 dark:text-slate-200">
+                  {personalizationSummary}
+                </p>
+              </div>
+            )}
+
             <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 space-y-3">
               <p className="text-sm sm:text-base font-medium text-slate-900 dark:text-slate-100">
                 {plan.summary}
@@ -293,6 +420,7 @@ export function ActionPlanView({
                           <RecommendationCard
                             key={`${sectionKey}-${idx}-${item.title}`}
                             item={item}
+                            language={language}
                             t={t}
                           />
                         ))}

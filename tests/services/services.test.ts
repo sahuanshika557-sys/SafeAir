@@ -6,7 +6,11 @@ import {
   resetGeminiClientState,
   streamFollowUpChat,
 } from '../../src/services/gemini.ts';
-import { searchCities } from '../../src/services/geocoding.ts';
+import {
+  clearReverseGeocodeCache,
+  reverseGeocodeCoordinates,
+  searchCities,
+} from '../../src/services/geocoding.ts';
 import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
 
 function createSseResponse(chunks: string[]): Response {
@@ -16,7 +20,9 @@ function createSseResponse(chunks: string[]): Response {
       for (const chunk of chunks) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
       }
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ done: true, model: 'gemini-2.5-flash' })}\n\n`),
+      );
       controller.close();
     },
   });
@@ -26,9 +32,48 @@ function createSseResponse(chunks: string[]): Response {
   });
 }
 
-describe('Service layer (Open-Meteo + Gemini SSE)', () => {
+const VALID_PLAN_PAYLOAD = {
+  summary: 'High smog precautions for New Delhi.',
+  bestTimeWindow: '1 PM - 4 PM',
+  worstTimeWindow: '6 AM - 9 AM',
+  dailyRoutine: [
+    {
+      title: 'Midday errands',
+      detail: 'Run errands at noon.',
+      whyItHelps: 'Lower inversion trapping.',
+      estimatedImpact: 'Approximate: 25% lower exposure',
+    },
+  ],
+  indoorAirHacks: [
+    {
+      title: 'Wet mop',
+      detail: 'Mop daily instead of sweeping.',
+      whyItHelps: 'Prevents dust resuspension.',
+      estimatedImpact: 'Approximate: 20% lower indoor dust',
+    },
+  ],
+  sustainableAlternatives: [
+    {
+      title: 'Take Metro',
+      detail: 'Use metro instead of car.',
+      whyItHelps: 'Cuts tailpipe emissions.',
+      estimatedImpact: 'Approximate: 2,000 g CO2 saved/day',
+    },
+  ],
+  healthProtection: [
+    {
+      title: 'N95 Mask',
+      detail: 'Wear fitted N95 outdoors.',
+      whyItHelps: 'Blocks fine PM2.5 particles.',
+      estimatedImpact: 'Approximate: 50% lower PM2.5 inhalation',
+    },
+  ],
+};
+
+describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () => {
   beforeEach(() => {
     clearAqiCache();
+    clearReverseGeocodeCache();
     resetGeminiClientState();
     vi.restoreAllMocks();
   });
@@ -92,31 +137,80 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
     await expect(searchCities('Patna', undefined, 'hi')).rejects.toThrow(/शहर खोजे नहीं जा सके/);
   });
 
-  it('propagates AbortError on canceled geocoding searches', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    await expect(searchCities('Delhi', controller.signal)).rejects.toThrow();
-  });
+  it('reverse geocodes coordinates via /api/reverse-geocode, caches, and degrades gracefully', async () => {
+    expect(await reverseGeocodeCoordinates(Number.NaN, 77.2)).toBeNull();
 
-  it('fetches live AQI with all pollutants, falls back to /api/aqi, caches, and rejects malformed data', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          current: {
-            time: '2026-11-18T12:00',
-            us_aqi: 215,
-            pm2_5: 132.44,
-            pm10: 195.21,
-            nitrogen_dioxide: 48.16,
-            ozone: 31.24,
-          },
+          resolved: true,
+          name: 'Varanasi',
+          admin1: 'Uttar Pradesh',
+          country: 'India',
         }),
         { status: 200 },
       ),
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    const first = await fetchAirQuality(28.61, 77.21);
+    const resolved = await reverseGeocodeCoordinates(25.3176, 82.9739, 'en');
+    expect(resolved).toEqual({ name: 'Varanasi', admin1: 'Uttar Pradesh', country: 'India' });
+    // Cached second call makes no additional fetch
+    const cached = await reverseGeocodeCoordinates(25.3176, 82.9739, 'en');
+    expect(cached).toEqual(resolved);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Graceful null fallback on unresolved, HTTP error, or network error
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ resolved: false, name: null }), { status: 200 }),
+    );
+    expect(await reverseGeocodeCoordinates(10.0, 10.0, 'en')).toBeNull();
+
+    fetchMock.mockResolvedValueOnce(new Response('Error', { status: 500 }));
+    expect(await reverseGeocodeCoordinates(11.0, 11.0, 'en')).toBeNull();
+
+    fetchMock.mockRejectedValueOnce(new Error('Offline'));
+    expect(await reverseGeocodeCoordinates(12.0, 12.0, 'en')).toBeNull();
+  });
+
+  it('propagates AbortError on canceled geocoding searches', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(searchCities('Delhi', controller.signal)).rejects.toThrow();
+  });
+
+  it('fetches live AQI, deduplicates concurrent calls, falls back to /api/aqi, and caches', async () => {
+    const fetchMock = vi.fn().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(
+              new Response(
+                JSON.stringify({
+                  current: {
+                    time: '2026-11-18T12:00',
+                    us_aqi: 215,
+                    pm2_5: 132.44,
+                    pm10: 195.21,
+                    nitrogen_dioxide: 48.16,
+                    ozone: 31.24,
+                  },
+                }),
+                { status: 200 },
+              ),
+            );
+          }, 10);
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Two concurrent fetches for the same coordinates should deduplicate to 1 upstream request
+    const [first, concurrent] = await Promise.all([
+      fetchAirQuality(28.61, 77.21),
+      fetchAirQuality(28.61, 77.21),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(concurrent);
     expect(first.usAqi).toBe(215);
     expect(first.pm25).toBe(132.4);
     expect(first.pm10).toBe(195.2);
@@ -167,44 +261,8 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
     );
   });
 
-  it('streams structured Gemini plan JSON, caches result, and rejects malformed JSON', async () => {
-    const validPlanJson = JSON.stringify({
-      summary: 'High smog precautions for New Delhi.',
-      bestTimeWindow: '1 PM - 4 PM',
-      worstTimeWindow: '6 AM - 9 AM',
-      dailyRoutine: [
-        {
-          title: 'Midday errands',
-          detail: 'Run errands at noon.',
-          whyItHelps: 'Lower inversion trapping.',
-          estimatedImpact: 'Approximate: 25% lower exposure',
-        },
-      ],
-      indoorAirHacks: [
-        {
-          title: 'Wet mop',
-          detail: 'Mop daily instead of sweeping.',
-          whyItHelps: 'Prevents dust resuspension.',
-          estimatedImpact: 'Approximate: 20% lower indoor dust',
-        },
-      ],
-      sustainableAlternatives: [
-        {
-          title: 'Take Metro',
-          detail: 'Use metro instead of car.',
-          whyItHelps: 'Cuts tailpipe emissions.',
-          estimatedImpact: 'Approximate: 2,000 g CO2 saved/day',
-        },
-      ],
-      healthProtection: [
-        {
-          title: 'N95 Mask',
-          detail: 'Wear fitted N95 outdoors.',
-          whyItHelps: 'Blocks fine PM2.5 particles.',
-          estimatedImpact: 'Approximate: 50% lower PM2.5 inhalation',
-        },
-      ],
-    });
+  it('streams structured Gemini plan JSON, deduplicates concurrent calls, repairs malformed JSON, and maps categories', async () => {
+    const validPlanJson = JSON.stringify(VALID_PLAN_PAYLOAD);
 
     const fetchMock = vi
       .fn()
@@ -214,20 +272,40 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const reading = createManualAirQualityReading(215);
-    const progressCalls: string[] = [];
-    const plan = await generatePersonalizedPlan({
+    const progressCallsA: string[] = [];
+    const progressCallsB: string[] = [];
+    const abortA = new AbortController();
+
+    // Concurrent calls share one in-flight request; aborting one subscriber preserves the other
+    const promiseA = generatePersonalizedPlan({
       location: DEFAULT_LOCATION,
       airQuality: reading,
       profile: DEFAULT_PROFILE,
       language: 'en',
-      onStreamProgress: (acc) => progressCalls.push(acc),
+      signal: abortA.signal,
+      onStreamProgress: (acc) => progressCallsA.push(acc),
+    });
+    const promiseB = generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      onStreamProgress: (acc) => progressCallsB.push(acc),
     });
 
-    expect(progressCalls.length).toBeGreaterThan(0);
+    const [plan, planB] = await Promise.all([promiseA, promiseB]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(progressCallsA.length).toBeGreaterThan(0);
+    expect(progressCallsB.length).toBeGreaterThan(0);
     expect(plan.isFallback).toBe(false);
-    expect(plan.dailyRoutine[0].title).toBe('Midday errands');
+    expect(plan.modelUsed).toBe('gemini-2.5-flash');
+    expect(plan.generatedForAqi).toBe(215);
+    expect(plan.generatedForLocationId).toBe(DEFAULT_LOCATION.id);
+    // Sanitized impact must strip duplicated leading "Approximate: "
+    expect(plan.dailyRoutine[0].estimatedImpact).toBe('25% lower exposure');
+    expect(planB.summary).toBe(plan.summary);
 
-    // Cached second call does not trigger fetch
+    // Cached call does not trigger fetch
     const cachedPlan = await generatePersonalizedPlan({
       location: DEFAULT_LOCATION,
       airQuality: reading,
@@ -237,8 +315,46 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
     expect(cachedPlan.summary).toBe(plan.summary);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Malformed AI JSON triggers clear error
-    fetchMock.mockResolvedValueOnce(createSseResponse(['{broken json']));
+    // Non-streaming JSON fallback response from /api/plan succeeds cleanly
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          text: validPlanJson,
+          model: 'gemini-2.5-flash-lite',
+          nonStreaming: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const nonStreamPlan = await generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      bypassCache: true,
+    });
+    expect(nonStreamPlan.modelUsed).toBe('gemini-2.5-flash-lite');
+
+    // Malformed SSE JSON triggers single repair request and succeeds when repair returns valid JSON
+    fetchMock.mockResolvedValueOnce(createSseResponse(['{broken json'])).mockResolvedValueOnce(
+      new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-2.5-flash' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const repairedPlan = await generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      bypassCache: true,
+    });
+    expect(repairedPlan.dailyRoutine[0].title).toBe('Midday errands');
+
+    // Malformed SSE JSON + failed repair throws clean localized message
+    fetchMock
+      .mockResolvedValueOnce(createSseResponse(['{broken json']))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'failed' }), { status: 502 }));
     await expect(
       generatePersonalizedPlan({
         location: DEFAULT_LOCATION,
@@ -249,10 +365,8 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
       }),
     ).rejects.toThrow(/incomplete or malformed/i);
 
-    // HTTP 503 failure surfaces clean message
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: 'Gemini AI unavailable' }), { status: 503 }),
-    );
+    // HTTP 500 without category uses friendly message and NEVER surfaces raw "HTTP 500"
+    fetchMock.mockResolvedValueOnce(new Response('Internal Server Error', { status: 500 }));
     await expect(
       generatePersonalizedPlan({
         location: DEFAULT_LOCATION,
@@ -261,7 +375,23 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
         language: 'en',
         bypassCache: true,
       }),
-    ).rejects.toThrow(/Gemini AI unavailable/i);
+    ).rejects.toSatisfy(
+      (err: Error) => !/500/.test(err.message) && /temporarily unreachable/i.test(err.message),
+    );
+
+    // HTTP error with category maps via getLocalizedApiErrorMessage
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ category: 'invalid_key', error: 'raw' }), { status: 502 }),
+    );
+    await expect(
+      generatePersonalizedPlan({
+        location: DEFAULT_LOCATION,
+        airQuality: reading,
+        profile: DEFAULT_PROFILE,
+        language: 'hi',
+        bypassCache: true,
+      }),
+    ).rejects.toThrow(/एआई सेवा की कुंजी अमान्य/);
 
     // SSE error event with errorType logs diagnostic type without leaking secrets
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -273,6 +403,7 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
             `data: ${JSON.stringify({
               error: 'Unable to generate AI plan right now.',
               errorType: 'ApiError',
+              category: 'model_unavailable',
             })}\n\n`,
           ),
         );
@@ -293,14 +424,22 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
         language: 'en',
         bypassCache: true,
       }),
-    ).rejects.toThrow(/Unable to generate AI plan right now/i);
+    ).rejects.toThrow(/AI model is temporarily unavailable/i);
     expect(warnSpy).toHaveBeenCalledWith('[SafeAir Saathi] AI stream failed:', {
       errorType: 'ApiError',
     });
   });
 
-  it('streams follow-up chat tokens and handles server errors', async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(createSseResponse(['Wear an ', 'N95 mask.']));
+  it('streams follow-up chat tokens, handles non-streaming JSON fallback, and maps errors cleanly', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(createSseResponse(['Wear an ', 'N95 mask.']))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ text: 'Seal windows at dawn.', nonStreaming: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
     vi.stubGlobal('fetch', fetchMock);
 
     const tokens: string[] = [];
@@ -315,8 +454,21 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
     expect(reply).toBe('Wear an N95 mask.');
     expect(tokens).toEqual(['Wear an ', 'Wear an N95 mask.']);
 
+    const nonStreamTokens: string[] = [];
+    const nonStreamReply = await streamFollowUpChat({
+      message: 'When to close windows?',
+      history: [],
+      context: { locationName: 'Delhi', usAqi: 240, categoryLabel: 'Very Unhealthy' },
+      language: 'en',
+      onToken: (text) => nonStreamTokens.push(text),
+    });
+    expect(nonStreamReply).toBe('Seal windows at dawn.');
+    expect(nonStreamTokens).toEqual(['Seal windows at dawn.']);
+
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { status: 429 }),
+      new Response(JSON.stringify({ category: 'quota_exceeded', error: 'Rate limit exceeded' }), {
+        status: 429,
+      }),
     );
     await expect(
       streamFollowUpChat({
@@ -326,7 +478,7 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
         language: 'en',
         onToken: () => undefined,
       }),
-    ).rejects.toThrow(/Rate limit exceeded/i);
+    ).rejects.toThrow(/busy right now/i);
   });
 
   it('enforces client-side 10 req/min rate limit across plan and chat requests', async () => {
@@ -354,5 +506,90 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
         onToken: () => undefined,
       }),
     ).rejects.toThrow(/अनुरोध सीमा पूरी हो गई है/);
+  });
+
+  it('handles caller AbortSignal safely across single and shared in-flight plan requests and JSON error responses', async () => {
+    const reading = createManualAirQualityReading(185);
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+
+    // Aborted before joining a shared in-flight request rejects with AbortError immediately
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementationOnce(async () => {
+        await gate;
+        return new Response(JSON.stringify({ category: 'bad_request', error: 'bad input' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }),
+    );
+
+    const pendingFirst = generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+    });
+
+    await expect(
+      generatePersonalizedPlan({
+        location: DEFAULT_LOCATION,
+        airQuality: reading,
+        profile: DEFAULT_PROFILE,
+        language: 'en',
+        signal: alreadyAborted.signal,
+      }),
+    ).rejects.toThrow();
+
+    releaseFirst();
+    await expect(pendingFirst).rejects.toThrow(/request could not be processed/i);
+
+    // Concurrent subscriber aborts after joining while first subscriber still receives valid plan
+    const validJson = JSON.stringify(VALID_PLAN_PAYLOAD);
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementationOnce(async () => {
+        await secondGate;
+        // Response with null body falls back cleanly to response.text()
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'text/plain' }),
+          body: null,
+          text: async () => validJson,
+        } as unknown as Response;
+      }),
+    );
+
+    const subAbort = new AbortController();
+    const p1 = generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      onStreamProgress: vi.fn(),
+    });
+    const p2 = generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      signal: subAbort.signal,
+      onStreamProgress: vi.fn(),
+    });
+    subAbort.abort();
+    releaseSecond();
+    const winner = await p1;
+    expect(winner.dailyRoutine[0].title).toBe('Midday errands');
+    await p2.catch(() => undefined);
   });
 });

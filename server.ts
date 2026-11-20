@@ -7,7 +7,9 @@ import {
   handleAqiRequest,
   handleChatRequest,
   handleGeocodeRequest,
+  handleHealthRequest,
   handlePlanRequest,
+  handleReverseGeocodeRequest,
 } from './src/server/apiHandlers.ts';
 import { extractSafeErrorDiagnostics } from './src/utils/errorDiagnostics.ts';
 
@@ -20,13 +22,22 @@ async function startServer(): Promise<void> {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
     next();
   });
   app.use(express.json({ limit: '32kb' }));
 
+  app.all('/api/health', (req: Request, res: Response): void => {
+    void handleHealthRequest(req, res);
+  });
+
   app.all('/api/geocode', (req: Request, res: Response): void => {
     void handleGeocodeRequest(req, res);
+  });
+
+  app.all('/api/reverse-geocode', (req: Request, res: Response): void => {
+    void handleReverseGeocodeRequest(req, res);
   });
 
   app.all('/api/aqi', (req: Request, res: Response): void => {

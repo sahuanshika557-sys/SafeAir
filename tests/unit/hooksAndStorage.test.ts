@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_PROFILE } from '../../src/constants/index.ts';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
 import { useAirQuality } from '../../src/hooks/useAirQuality.ts';
 import { useDebounce } from '../../src/hooks/useDebounce.ts';
 import { useGeolocation } from '../../src/hooks/useGeolocation.ts';
@@ -8,6 +8,7 @@ import { usePlanGenerator } from '../../src/hooks/usePlanGenerator.ts';
 import { useSpeechSynthesis } from '../../src/hooks/useSpeechSynthesis.ts';
 import { clearAqiCache } from '../../src/services/airQuality.ts';
 import { resetGeminiClientState } from '../../src/services/gemini.ts';
+import { clearReverseGeocodeCache } from '../../src/services/geocoding.ts';
 import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
 import { loadLanguagePreference, saveLanguagePreference } from '../../src/utils/storage.ts';
 
@@ -38,6 +39,7 @@ describe('Language storage helper', () => {
 describe('Custom hooks', () => {
   beforeEach(() => {
     clearAqiCache();
+    clearReverseGeocodeCache();
     resetGeminiClientState();
     vi.restoreAllMocks();
   });
@@ -57,7 +59,7 @@ describe('Custom hooks', () => {
     vi.useRealTimers();
   });
 
-  it('handles geolocation success, timeout, and permission denial in useGeolocation', async () => {
+  it('handles geolocation success, timeout, unavailable, and permission denial in useGeolocation', async () => {
     const getCurrentPosition = vi.fn<Geolocation['getCurrentPosition']>((success) => {
       success({
         coords: { latitude: 28.61, longitude: 77.2 },
@@ -92,11 +94,20 @@ describe('Custom hooks', () => {
     });
     expect(result.current.error).toContain('timed out');
 
+    getCurrentPosition.mockImplementation((_success, error) => {
+      error?.({ code: 2, PERMISSION_DENIED: 1, TIMEOUT: 3 } as GeolocationPositionError);
+    });
+    await act(async () => {
+      coords = await result.current.requestLocation();
+    });
+    expect(result.current.error).toContain('Unable to determine');
+
     act(() => result.current.clearError());
     expect(result.current.error).toBeNull();
   });
 
-  it('loads AQI, searches cities, loads by coords, refreshes, and applies manual AQI in useAirQuality', async () => {
+  it('loads AQI, searches cities, resolves geolocation place names, and falls back to coords cleanly', async () => {
+    let reverseShouldResolve = true;
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('geocoding-api.open-meteo.com')) {
@@ -114,6 +125,18 @@ describe('Custom hooks', () => {
                 },
               ],
             }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.includes('/api/reverse-geocode')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              reverseShouldResolve
+                ? { resolved: true, name: 'Jaipur', admin1: 'Rajasthan', country: 'India' }
+                : { resolved: false, name: null, admin1: '', country: '' },
+            ),
             { status: 200 },
           ),
         );
@@ -157,10 +180,20 @@ describe('Custom hooks', () => {
     expect(result.current.location.name).toBe('Patna');
     expect(fetchMock).toHaveBeenCalledTimes(callsBeforeLangSwitch);
 
+    // Browser geolocation with resolved place name replaces coordinates cleanly
     await act(async () => {
-      await result.current.loadByCoordinates(26.84, 80.94, 'Lucknow');
+      await result.current.loadByCoordinates(26.9124, 75.7873);
     });
-    expect(result.current.location.name).toBe('Lucknow');
+    expect(result.current.location.name).toBe('Jaipur');
+    expect(result.current.location.admin1).toBe('Rajasthan');
+    expect(result.current.location.country).toBe('India');
+
+    // Graceful coordinate fallback if reverse geocoding returns unresolved
+    reverseShouldResolve = false;
+    await act(async () => {
+      await result.current.loadByCoordinates(22.5726, 88.3639);
+    });
+    expect(result.current.location.name).toContain('22.57');
 
     act(() => {
       result.current.refreshAqi();
@@ -197,14 +230,19 @@ describe('Custom hooks', () => {
     expect(result.current.error).toContain('लोकेशन अनुमति अस्वीकार');
   });
 
-  it('falls back to rule-based plan and retries in usePlanGenerator', async () => {
+  it('falls back to rule-based plan with provenance and retries in usePlanGenerator', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 }),
+        new Response(
+          JSON.stringify({ category: 'model_unavailable', error: 'Model unavailable' }),
+          { status: 503 },
+        ),
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ error: 'Still unavailable' }), { status: 503 }),
+        new Response(JSON.stringify({ category: 'quota_exceeded', error: 'Quota exceeded' }), {
+          status: 429,
+        }),
       );
     vi.stubGlobal('fetch', fetchMock);
 
@@ -213,27 +251,22 @@ describe('Custom hooks', () => {
 
     await act(async () => {
       await result.current.generatePlan({
-        location: {
-          id: 'test-loc',
-          name: 'Delhi',
-          country: 'India',
-          latitude: 28.61,
-          longitude: 77.2,
-          source: 'search',
-        },
+        location: DEFAULT_LOCATION,
         airQuality: reading,
         profile: DEFAULT_PROFILE,
         language: 'en',
       });
     });
 
-    expect(result.current.error).toContain('Service unavailable');
+    expect(result.current.error).toContain('temporarily unavailable');
     expect(result.current.plan?.isFallback).toBe(true);
+    expect(result.current.plan?.generatedForLocationId).toBe(DEFAULT_LOCATION.id);
+    expect(result.current.plan?.generatedForAqi).toBe(220);
 
     await act(async () => {
       await result.current.retryLastPlan();
     });
-    expect(result.current.error).toContain('Still unavailable');
+    expect(result.current.error).toContain('busy right now');
   });
 
   it('invokes speechSynthesis cleanly in useSpeechSynthesis', () => {
@@ -262,5 +295,118 @@ describe('Custom hooks', () => {
       result.current.stop();
     });
     expect(cancelMock).toHaveBeenCalled();
+  });
+
+  it('handles debounced search, selectCity, search/AQI error paths, and live plan streaming success', async () => {
+    const validPlanJson = JSON.stringify({
+      summary: 'Tailored live plan.',
+      bestTimeWindow: '1 PM - 4 PM',
+      worstTimeWindow: '6 AM - 9 AM',
+      dailyRoutine: [
+        {
+          title: 'Midday errands',
+          detail: 'Go out at noon.',
+          whyItHelps: 'Lower smog.',
+          estimatedImpact: '20% lower exposure',
+        },
+      ],
+      indoorAirHacks: [
+        {
+          title: 'Seal windows',
+          detail: 'Use draft stoppers.',
+          whyItHelps: 'Cuts infiltration.',
+          estimatedImpact: '25% cleaner indoor air',
+        },
+      ],
+      sustainableAlternatives: [
+        {
+          title: 'Metro commute',
+          detail: 'Skip solo driving.',
+          whyItHelps: 'Reduces PM2.5.',
+          estimatedImpact: '11.5 kg CO2 avoided/week',
+        },
+      ],
+      healthProtection: [
+        {
+          title: 'N95 mask',
+          detail: 'Wear sealed N95.',
+          whyItHelps: 'Filters PM2.5.',
+          estimatedImpact: '30%–40% lower intake',
+        },
+      ],
+    });
+
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('geocoding-api.open-meteo.com')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              results: [
+                {
+                  id: 202,
+                  name: 'Kanpur',
+                  latitude: 26.45,
+                  longitude: 80.33,
+                  country: 'India',
+                  admin1: 'Uttar Pradesh',
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (url.includes('/api/plan')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-2.5-flash' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      }
+      return Promise.reject(new Error('AQI offline'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useAirQuality('en'));
+    await waitFor(() => expect(result.current.isLoadingAqi).toBe(false));
+    expect(result.current.aqiError).toContain('Live air quality data could not be loaded');
+
+    // Invalid symbol query shows validation error immediately
+    act(() => {
+      result.current.setSearchQuery('@@@');
+    });
+    expect(result.current.searchError).toBeTruthy();
+
+    // Short query clears results
+    act(() => {
+      result.current.setSearchQuery('a');
+    });
+    expect(result.current.searchResults).toEqual([]);
+
+    // Valid search & debounced selectCity
+    act(() => {
+      result.current.setSearchQuery('Kanpur');
+    });
+    await waitFor(() => expect(result.current.searchResults).toHaveLength(1));
+    act(() => {
+      result.current.selectCity(result.current.searchResults[0]);
+    });
+    expect(result.current.location.name).toBe('Kanpur');
+
+    // Plan generator live JSON/SSE success
+    const { result: planHook } = renderHook(() => usePlanGenerator());
+    await act(async () => {
+      await planHook.current.generatePlan({
+        location: DEFAULT_LOCATION,
+        airQuality: createManualAirQualityReading(185),
+        profile: DEFAULT_PROFILE,
+        language: 'en',
+      });
+    });
+    expect(planHook.current.error).toBeNull();
+    expect(planHook.current.plan?.isFallback).toBe(false);
+    expect(planHook.current.plan?.summary).toBe('Tailored live plan.');
   });
 });

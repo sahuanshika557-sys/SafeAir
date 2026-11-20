@@ -5,7 +5,7 @@ import {
   MIN_SEARCH_QUERY_LENGTH,
 } from '../constants/index.ts';
 import { fetchAirQuality } from '../services/airQuality.ts';
-import { searchCities } from '../services/geocoding.ts';
+import { reverseGeocodeCoordinates, searchCities } from '../services/geocoding.ts';
 import type { AirQualityReading, Language, LocationData } from '../types/index.ts';
 import { createManualAirQualityReading } from '../utils/aqi.ts';
 import { isAbortError } from '../utils/network.ts';
@@ -51,7 +51,7 @@ function resolveCitySearchErrorMessage(err: unknown, language: Language): string
 
 /**
  * Coordinates debounced city search, `AbortController` request cancellation, live AQI fetching,
- * and manual AQI fallback with localized status/error messages.
+ * reverse geocoding for browser coordinates, and manual AQI fallback.
  *
  * @param language - Active UI language used for localized status and error messages.
  * @returns Reactive air quality state and location search/refresh handlers.
@@ -258,21 +258,45 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
 
   const loadByCoordinates = useCallback(
     async (latitude: number, longitude: number, label?: string): Promise<void> => {
-      const defaultLabel =
+      const fallbackLabel =
         language === 'hi'
           ? `वर्तमान स्थान (${latitude.toFixed(2)}, ${longitude.toFixed(2)})`
           : `Current Location (${latitude.toFixed(2)}, ${longitude.toFixed(2)})`;
-      const nextLoc: LocationData = {
+      const initialLoc: LocationData = {
         id: 'geo-current',
-        name: label ?? defaultLabel,
+        name: label ?? fallbackLabel,
         country: '',
         latitude,
         longitude,
         source: 'geolocation',
       };
-      setLocation(nextLoc);
+      setLocation(initialLoc);
       setSearchQuery('');
-      await loadAqiForLocation(nextLoc, true);
+
+      if (label) {
+        await loadAqiForLocation(initialLoc, true);
+        return;
+      }
+
+      const [resolvedPlace] = await Promise.all([
+        reverseGeocodeCoordinates(latitude, longitude, language).catch(() => null),
+        loadAqiForLocation(initialLoc, true),
+      ]);
+
+      if (resolvedPlace) {
+        setLocation((prev) =>
+          prev.id === 'geo-current' &&
+          Math.abs(prev.latitude - latitude) < 0.001 &&
+          Math.abs(prev.longitude - longitude) < 0.001
+            ? {
+                ...prev,
+                name: resolvedPlace.name,
+                admin1: resolvedPlace.admin1,
+                country: resolvedPlace.country,
+              }
+            : prev,
+        );
+      }
     },
     [language, loadAqiForLocation, setSearchQuery],
   );

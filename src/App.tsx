@@ -185,6 +185,20 @@ export default function App(): ReactElement {
             streamCharCount={streamCharCount}
             error={planError}
             onRetry={() => void retryLastPlan()}
+            currentLocation={location}
+            currentReading={reading}
+            currentProfile={profile}
+            onRegenerateForCurrent={() => {
+              if (reading) {
+                void generatePlan({
+                  location,
+                  airQuality: reading,
+                  profile,
+                  language,
+                  bypassCache: true,
+                });
+              }
+            }}
           />
         </ErrorBoundary>
 

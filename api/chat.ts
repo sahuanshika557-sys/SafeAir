@@ -4,6 +4,10 @@ import {
   type ServerApiResponse,
 } from '../src/server/apiHandlers.ts';
 
+export const config = {
+  maxDuration: 60,
+};
+
 /**
  * Vercel Node.js serverless function handler for `POST /api/chat`.
  *

@@ -90,12 +90,18 @@ export interface TranslationDictionary {
   planEmptyTitle: string;
   planEmptyBody: string;
   planStreamingNotice: string;
+  whyFitsTitle: string;
+  planOutdatedTitle: string;
+  planOutdatedBody: (place: string, aqi: number, categoryLabel: string) => string;
+  regenerateForLocationBtn: string;
   geminiErrorTitle: string;
   retryBtn: string;
   fallbackBannerNotice: string;
   impactTitle: string;
   impactSubtitle: string;
   impactApproxNote: string;
+  impactHowWeEstimateTitle: string;
+  impactHowWeEstimateBody: string;
   co2SavedLabel: string;
   pm25ReductionLabel: string;
   perWeekSuffix: string;
@@ -232,6 +238,11 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     planEmptyBody:
       'Confirm your city or AQI above, adjust your household profile, and select "Generate Personalized Plan".',
     planStreamingNotice: 'Streaming personalized recommendations from Gemini...',
+    whyFitsTitle: 'Why this plan fits you',
+    planOutdatedTitle: 'Location, AQI, or language changed',
+    planOutdatedBody: (place: string, aqi: number, categoryLabel: string) =>
+      `Active reading is now ${place} (${aqi} US AQI · ${categoryLabel}). Previous AQI guidance has been hidden so outdated numbers are not shown.`,
+    regenerateForLocationBtn: 'Regenerate for this location',
     geminiErrorTitle: 'Could not reach the AI plan generator.',
     retryBtn: 'Retry AI Plan',
     fallbackBannerNotice:
@@ -241,6 +252,9 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
       'Select everyday swaps below to see approximate weekly CO₂ savings and PM2.5 exposure reduction.',
     impactApproxNote:
       'All figures are approximate order-of-magnitude estimates for typical urban commutes.',
+    impactHowWeEstimateTitle: 'How we estimate',
+    impactHowWeEstimateBody:
+      'Combined PM2.5 exposure drops are not added linearly: we sort selected swaps, apply a diminishing-returns factor (×0.85 per extra swap) multiplicatively, and cap total reduction at 65% because ambient winter smog still penetrates outdoors and buildings.',
     co2SavedLabel: 'Estimated CO₂ avoided',
     pm25ReductionLabel: 'Estimated PM2.5 exposure drop',
     perWeekSuffix: 'per week',
@@ -376,6 +390,11 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     planEmptyTitle: 'योजना बनाने के लिए तैयार',
     planEmptyBody: 'ऊपर अपना शहर या AQI चुनें, प्रोफ़ाइल भरें और "व्यक्तिगत योजना बनाएँ" दबाएँ।',
     planStreamingNotice: 'एआई से व्यक्तिगत सुझाव प्राप्त किए जा रहे हैं...',
+    whyFitsTitle: 'यह योजना आपके परिवार के लिए क्यों उपयुक्त है',
+    planOutdatedTitle: 'स्थान, AQI या भाषा बदल गई है',
+    planOutdatedBody: (place: string, aqi: number, categoryLabel: string) =>
+      `वर्तमान रीडिंग अब ${place} (${aqi} यूएस AQI · ${categoryLabel}) है। पुरानी AQI संख्या छिपा दी गई है ताकि गलत जानकारी न दिखे।`,
+    regenerateForLocationBtn: 'इस स्थान के लिए पुनः योजना बनाएँ',
     geminiErrorTitle: 'एआई योजना जनरेटर से संपर्क नहीं हो सका।',
     retryBtn: 'पुनः प्रयास करें',
     fallbackBannerNotice:
@@ -383,6 +402,9 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     impactTitle: 'साप्ताहिक प्रभाव कैलकुलेटर',
     impactSubtitle: 'नीचे दैनिक बदलाव चुनें और साप्ताहिक अनुमानित CO₂ बचत व PM2.5 जोखिम कमी देखें।',
     impactApproxNote: 'सभी आंकड़े सामान्य शहरी आवागमन पर आधारित अनुमानित (लगभग) मान हैं।',
+    impactHowWeEstimateTitle: 'हम यह अनुमान कैसे लगाते हैं',
+    impactHowWeEstimateBody:
+      'कई उपायों के PM2.5 लाभ सीधे जोड़े नहीं जाते: हम चुने गए उपायों पर घटते लाभ (प्रत्येक अतिरिक्त बदलाव पर ×0.85) के साथ गुणनात्मक गणना करते हैं और कुल कमी को अधिकतम 65% पर सीमित रखते हैं, क्योंकि बाहरी स्मॉग पूरी तरह शून्य नहीं हो सकता।',
     co2SavedLabel: 'अनुमानित CO₂ बचत',
     pm25ReductionLabel: 'अनुमानित PM2.5 जोखिम कमी',
     perWeekSuffix: 'प्रति सप्ताह',
