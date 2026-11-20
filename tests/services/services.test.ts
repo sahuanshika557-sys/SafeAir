@@ -21,7 +21,9 @@ function createSseResponse(chunks: string[]): Response {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
       }
       controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ done: true, model: 'gemini-3.8-flash' })}\n\n`),
+        encoder.encode(
+          `data: ${JSON.stringify({ done: true, model: 'gemini-3.5-flash-lite' })}\n\n`,
+        ),
       );
       controller.close();
     },
@@ -298,7 +300,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
     expect(progressCallsA.length).toBeGreaterThan(0);
     expect(progressCallsB.length).toBeGreaterThan(0);
     expect(plan.isFallback).toBe(false);
-    expect(plan.modelUsed).toBe('gemini-3.8-flash');
+    expect(plan.modelUsed).toBe('gemini-3.5-flash-lite');
     expect(plan.generatedForAqi).toBe(215);
     expect(plan.generatedForLocationId).toBe(DEFAULT_LOCATION.id);
     // Sanitized impact must strip duplicated leading "Approximate: "
@@ -591,5 +593,115 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
     const winner = await p1;
     expect(winner.dailyRoutine[0].title).toBe('Midday errands');
     await p2.catch(() => undefined);
+  });
+
+  it('handles replacementText SSE event, MAX_TOKENS truncation metadata, and abrupt stream cutoff in gemini service', async () => {
+    const encoder = new TextEncoder();
+
+    // 1. SSE /api/plan emits replacementText after chunk stream
+    const sanitizedPlan = {
+      ...VALID_PLAN_PAYLOAD,
+      summary: 'HEPA-verified guidance for New Delhi.',
+    };
+    const planStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ chunk: JSON.stringify(VALID_PLAN_PAYLOAD) })}\n\n`,
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({
+              replacementText: JSON.stringify(sanitizedPlan),
+              model: 'gemini-3.5-flash-lite',
+            })}\n\n`,
+          ),
+        );
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ done: true, model: 'gemini-3.5-flash-lite' })}\n\n`,
+          ),
+        );
+        controller.close();
+      },
+    });
+
+    // 2. SSE /api/chat emits finishReason: MAX_TOKENS -> onComplete({ truncated: true, finishReason: 'MAX_TOKENS' })
+    const maxTokenStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ chunk: 'Use an N95 mask when stepping' })}\n\n`),
+        );
+        controller.enqueue(
+          encoder.encode(
+            `data: ${JSON.stringify({ done: true, truncated: true, finishReason: 'MAX_TOKENS' })}\n\n`,
+          ),
+        );
+        controller.close();
+      },
+    });
+
+    // 3. SSE /api/chat terminates unexpectedly without { done: true } -> truncated: true
+    const cutStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify({ chunk: 'Seal window gaps first' })}\n\n`),
+        );
+        controller.close();
+      },
+    });
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(planStream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(maxTokenStream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(cutStream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const reading = createManualAirQualityReading(210);
+    const replacedPlan = await generatePersonalizedPlan({
+      location: DEFAULT_LOCATION,
+      airQuality: reading,
+      profile: DEFAULT_PROFILE,
+      language: 'en',
+      bypassCache: true,
+    });
+    expect(replacedPlan.summary).toBe('HEPA-verified guidance for New Delhi.');
+
+    let meta1: { truncated: boolean; finishReason?: string } | undefined;
+    await streamFollowUpChat({
+      message: 'Tell me more',
+      history: [],
+      context: { locationName: 'Delhi', usAqi: 210, categoryLabel: 'Very Unhealthy' },
+      language: 'en',
+      onToken: () => undefined,
+      onComplete: (meta) => {
+        meta1 = meta;
+      },
+    });
+    expect(meta1).toMatchObject({ truncated: true, finishReason: 'MAX_TOKENS' });
+
+    let meta2: { truncated: boolean; finishReason?: string } | undefined;
+    await streamFollowUpChat({
+      message: 'What else?',
+      history: [],
+      context: { locationName: 'Delhi', usAqi: 210, categoryLabel: 'Very Unhealthy' },
+      language: 'en',
+      onToken: () => undefined,
+      onComplete: (meta) => {
+        meta2 = meta;
+      },
+    });
+    expect(meta2?.truncated).toBe(true);
   });
 });

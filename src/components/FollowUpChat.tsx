@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { MAX_FREE_TEXT_LENGTH } from '../constants/index.js';
 import type { TranslationDictionary } from '../i18n/translations.js';
 import { streamFollowUpChat } from '../services/gemini.js';
@@ -12,6 +11,7 @@ import type {
 } from '../types/index.js';
 import { isAbortError } from '../utils/network.js';
 import { validateChatMessage } from '../utils/validation.js';
+import { SafeMarkdown } from './SafeMarkdown.js';
 
 interface FollowUpChatProps {
   t: TranslationDictionary;
@@ -23,7 +23,7 @@ interface FollowUpChatProps {
 
 /**
  * Safe follow-up chat assistant scoped strictly to air quality, health protection, and sustainability.
- * Uses react-markdown with raw HTML disabled to prevent XSS.
+ * Uses the custom HTML-free SafeMarkdown renderer and shows a localized Continue control when truncated.
  */
 export function FollowUpChat({
   t,
@@ -43,6 +43,20 @@ export function FollowUpChat({
       abortRef.current?.abort();
     };
   }, []);
+
+  const buildChatContext = () => {
+    const categoryLabel = reading
+      ? language === 'hi'
+        ? reading.category.labelHi
+        : reading.category.labelEn
+      : t.notAvailable;
+    return {
+      locationName: [location.name, location.country].filter(Boolean).join(', '),
+      usAqi: reading?.usAqi ?? 150,
+      categoryLabel,
+      planSummary: plan?.summary,
+    };
+  };
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -76,28 +90,22 @@ export function FollowUpChat({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    try {
-      const categoryLabel = reading
-        ? language === 'hi'
-          ? reading.category.labelHi
-          : reading.category.labelEn
-        : t.notAvailable;
+    let completedTruncated = false;
 
+    try {
       const finalText = await streamFollowUpChat({
         message: validation.sanitized,
         history: nextHistory,
-        context: {
-          locationName: [location.name, location.country].filter(Boolean).join(', '),
-          usAqi: reading?.usAqi ?? 150,
-          categoryLabel,
-          planSummary: plan?.summary,
-        },
+        context: buildChatContext(),
         language,
         signal: controller.signal,
         onToken: (accumulated) => {
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: accumulated } : m)),
           );
+        },
+        onComplete: ({ truncated }) => {
+          completedTruncated = truncated;
         },
       });
 
@@ -109,9 +117,14 @@ export function FollowUpChat({
                   ...m,
                   content: t.chatIncompleteError,
                   isError: true,
+                  isTruncated: false,
                 }
               : m,
           ),
+        );
+      } else if (completedTruncated) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, isTruncated: true } : m)),
         );
       }
     } catch (err: unknown) {
@@ -120,7 +133,82 @@ export function FollowUpChat({
       }
       const message = err instanceof Error ? err.message : t.chatUnavailableError;
       setMessages((prev) =>
-        prev.map((m) => (m.id === assistantId ? { ...m, content: message, isError: true } : m)),
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: message, isError: true, isTruncated: false } : m,
+        ),
+      );
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  const handleContinueMessage = async (targetMsgId: string): Promise<void> => {
+    const targetIdx = messages.findIndex((m) => m.id === targetMsgId);
+    if (targetIdx === -1 || isStreaming) {
+      return;
+    }
+
+    const baseContent = messages[targetIdx].content;
+    const historyUpToMessage = messages.slice(0, targetIdx + 1);
+    setIsStreaming(true);
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    let continuationTruncated = false;
+
+    try {
+      const joinPrefix = baseContent && !baseContent.endsWith('\n') ? '\n\n' : '';
+      const continuationText = await streamFollowUpChat({
+        message: t.chatContinuePrompt,
+        history: historyUpToMessage,
+        context: buildChatContext(),
+        language,
+        signal: controller.signal,
+        onToken: (accumulated) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === targetMsgId
+                ? {
+                    ...m,
+                    content: `${baseContent}${accumulated ? `${joinPrefix}${accumulated}` : ''}`,
+                  }
+                : m,
+            ),
+          );
+        },
+        onComplete: ({ truncated }) => {
+          continuationTruncated = truncated;
+        },
+      });
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === targetMsgId
+            ? {
+                ...m,
+                content: `${baseContent}${continuationText.trim() ? `${joinPrefix}${continuationText}` : ''}`,
+                isTruncated: continuationTruncated,
+              }
+            : m,
+        ),
+      );
+    } catch (err: unknown) {
+      if (isAbortError(err)) {
+        return;
+      }
+      const errMsg = err instanceof Error ? err.message : t.chatUnavailableError;
+      setMessages((prev) =>
+        prev
+          .map((m) => (m.id === targetMsgId ? { ...m, isTruncated: false } : m))
+          .concat({
+            id: `a-err-${Date.now()}`,
+            role: 'assistant',
+            content: errMsg,
+            timestamp: new Date().toISOString(),
+            isError: true,
+          }),
       );
     } finally {
       setIsStreaming(false);
@@ -162,20 +250,30 @@ export function FollowUpChat({
                   ? 'ml-auto max-w-2xl bg-teal-800 text-white dark:bg-teal-700'
                   : msg.isError
                     ? 'mr-auto max-w-2xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/50 text-red-900 dark:text-red-100'
-                    : 'mr-auto max-w-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100'
+                    : 'mr-auto max-w-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 space-y-2.5'
               }`}
             >
               {msg.role === 'user' ? (
                 <p>{msg.content}</p>
               ) : msg.content ? (
-                <div className="space-y-2 [&>ul]:list-disc [&>ul]:pl-5 [&>ol]:list-decimal [&>ol]:pl-5">
-                  <ReactMarkdown
-                    allowedElements={['p', 'ul', 'ol', 'li', 'strong', 'em', 'code']}
-                    unwrapDisallowed
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
-                </div>
+                <>
+                  <SafeMarkdown text={msg.content} />
+                  {msg.isTruncated && !msg.isError && !isStreaming && (
+                    <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs text-slate-600 dark:text-slate-400">
+                        {t.chatTruncatedNotice}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleContinueMessage(msg.id)}
+                        aria-label={t.chatShowMoreLabel}
+                        className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-teal-700 dark:border-teal-500 px-3.5 py-2 text-xs font-semibold text-teal-800 dark:text-teal-200 hover:bg-teal-50 dark:hover:bg-teal-950/60 transition-colors"
+                      >
+                        {t.chatContinueBtn}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <p className="text-slate-600 dark:text-slate-400">{t.chatSendingBtn}</p>
               )}

@@ -37,17 +37,17 @@ export const MIN_US_AQI = 0;
 export const MAX_CHAT_HISTORY_MESSAGES = 8;
 
 /** Primary default Gemini model identifier (overridable via GEMINI_MODEL). */
-export const GEMINI_MODEL = 'gemini-3.8-flash';
+export const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 
 /** Ordered default Gemini model fallback chain evaluated on model-not-found, permission, or access errors. */
 export const GEMINI_FALLBACK_MODELS: readonly string[] = [
-  'gemini-3.8-flash',
   'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
   'gemini-3.6-flash',
 ];
 
 /** Default secondary fallback Gemini model identifier when the primary model is unavailable. */
-export const GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
+export const GEMINI_FALLBACK_MODEL = 'gemini-3.8-flash';
 
 /** Maximum live Gemini probe requests allowed per IP per rate-limit window on GET /api/health?probe=1. */
 export const HEALTH_PROBE_RATE_LIMIT_MAX = 5;
@@ -72,6 +72,9 @@ export const SERVER_GEMINI_TOTAL_TIMEOUT_MS = 45000;
 
 /** LocalStorage key for language preference only. */
 export const LANGUAGE_STORAGE_KEY = 'safeair_saathi_language';
+
+/** LocalStorage key for persistent animation pause preference. */
+export const ANIMATIONS_PAUSED_STORAGE_KEY = 'safeair_saathi_animations_paused';
 
 /** Maximum defensible combined PM2.5 exposure reduction cap (%). */
 export const MAX_COMBINED_PM25_REDUCTION_PERCENT = 65;

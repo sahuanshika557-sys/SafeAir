@@ -45,6 +45,10 @@ import {
 } from '../utils/promptBuilder.js';
 import { SlidingWindowRateLimiter } from '../utils/rateLimiter.js';
 import {
+  sanitizeChatScientificClaims,
+  sanitizePlanScientificClaims,
+} from '../utils/scientificFilter.js';
+import {
   actionPlanSchema,
   lifestyleProfileSchema,
   sanitizeTextInput,
@@ -510,19 +514,20 @@ function buildModelConfig(
   abortSignal: AbortSignal,
 ) {
   const isGemini3Or4 = /^gemini-[34]/i.test(model);
+  const isLiteModel = /flash-lite/i.test(model);
   return {
     systemInstruction,
     safetySettings,
     abortSignal,
+    maxOutputTokens: responseSchema ? 4096 : 2400,
     ...(isGemini3Or4
       ? {
           thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW,
+            thinkingLevel: isLiteModel ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
           },
         }
       : {
           temperature: 0.25,
-          maxOutputTokens: responseSchema ? 2800 : 1200,
         }),
     ...(responseSchema
       ? {
@@ -533,9 +538,15 @@ function buildModelConfig(
   };
 }
 
+interface GeminiStreamChunk {
+  text?: string;
+  candidates?: Array<{ finishReason?: string }>;
+}
+
 interface FirstChunkStreamResult {
   firstChunk: string;
-  iterator: AsyncIterator<{ text?: string }>;
+  firstFinishReason?: string;
+  iterator: AsyncIterator<GeminiStreamChunk>;
   model: string;
 }
 
@@ -569,12 +580,17 @@ async function openValidatedStreamWithRetry(
             params.signal,
           ),
         });
-        const iterator = stream[Symbol.asyncIterator]();
+        const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<GeminiStreamChunk>;
         let firstChunk = '';
+        let firstFinishReason: string | undefined;
         while (true) {
           const next = await iterator.next();
           if (next.done) {
             break;
+          }
+          const chunkFinish = next.value?.candidates?.[0]?.finishReason;
+          if (chunkFinish) {
+            firstFinishReason = chunkFinish;
           }
           if (next.value?.text) {
             firstChunk = next.value.text;
@@ -584,7 +600,7 @@ async function openValidatedStreamWithRetry(
         if (!firstChunk) {
           throw new Error('Empty stream response from Gemini.');
         }
-        return { firstChunk, iterator, model };
+        return { firstChunk, firstFinishReason, iterator, model };
       } catch (err: unknown) {
         lastError = err;
         const { category, httpStatus, retryable } = classifyUpstreamError(err);
@@ -624,7 +640,7 @@ async function generateNonStreamingWithRetry(
     responseSchema?: Schema;
     signal: AbortSignal;
   },
-): Promise<{ text: string; model: string }> {
+): Promise<{ text: string; model: string; finishReason?: string }> {
   const baseDelay = aiTestOverrides?.retryDelayBaseMs ?? BASE_RETRY_DELAY_MS;
   const models = getGeminiModelCandidates();
   let lastError: unknown;
@@ -649,7 +665,8 @@ async function generateNonStreamingWithRetry(
         if (!text) {
           throw new Error('Empty response from Gemini.');
         }
-        return { text, model };
+        const finishReason = response.candidates?.[0]?.finishReason;
+        return { text, model, finishReason };
       } catch (err: unknown) {
         lastError = err;
         const { category, httpStatus, retryable } = classifyUpstreamError(err);
@@ -680,7 +697,10 @@ async function generateNonStreamingWithRetry(
   throw lastError ?? new Error('All Gemini non-streaming attempts failed.');
 }
 
-function tryParseValidPlanJson(rawText: string): string | null {
+function tryParseValidPlanJson(
+  rawText: string,
+  language: Language,
+): { json: string; flaggedCount: number } | null {
   const cleaned = rawText
     .replace(/^```json\s*/i, '')
     .replace(/```$/i, '')
@@ -688,10 +708,44 @@ function tryParseValidPlanJson(rawText: string): string | null {
   try {
     const parsed = JSON.parse(cleaned);
     const validated = actionPlanSchema.safeParse(parsed);
-    return validated.success ? JSON.stringify(validated.data) : null;
+    if (!validated.success) {
+      return null;
+    }
+    const { plan: sanitizedPlan, flaggedClaims } = sanitizePlanScientificClaims(
+      validated.data,
+      language,
+    );
+    return {
+      json: JSON.stringify(sanitizedPlan),
+      flaggedCount: flaggedClaims.length,
+    };
   } catch {
     return null;
   }
+}
+
+const STREAM_CLAIM_SUSPECT_RE =
+  /(?:house\s*plant|indoor\s*plant|snake\s*plant|spider\s*plant|areca\s*palm|peace\s*lily|money\s*plant|aloe|fern|पौध|100\s*%|99\.9|cloth\s*mask|handkerchief|scarf|कपड़े\s*का\s*मास्क|रुमाल)/i;
+
+function emitSanitizedChatSegment(
+  res: ServerApiResponse,
+  segment: string,
+  language: Language,
+  modelHeader?: string,
+): void {
+  if (!segment) {
+    return;
+  }
+  const { text: cleaned, flaggedClaims } = sanitizeChatScientificClaims(segment, language);
+  if (flaggedClaims.length > 0) {
+    console.warn('[SafeAir Saathi] Scientific claim guard adjusted chat output:', {
+      count: flaggedClaims.length,
+    });
+  }
+  if (!cleaned) {
+    return;
+  }
+  writeSseEvent(res, modelHeader ? { chunk: cleaned, model: modelHeader } : { chunk: cleaned });
 }
 
 async function handleGeminiResponse(
@@ -750,7 +804,71 @@ async function handleGeminiResponse(
           res.flushHeaders();
         }
 
-        writeSseEvent(res, { chunk: streamResult.firstChunk, model: streamResult.model });
+        let lastFinishReason: string | undefined = streamResult.firstFinishReason;
+        let accumulatedPlanText = '';
+        let pendingChatBuffer = '';
+        let sentModelHeader = false;
+
+        const processChatChunk = (chunkText: string, flushAll: boolean): void => {
+          pendingChatBuffer += chunkText;
+          if (flushAll) {
+            emitSanitizedChatSegment(
+              res,
+              pendingChatBuffer,
+              options.language,
+              sentModelHeader ? undefined : streamResult.model,
+            );
+            sentModelHeader = true;
+            pendingChatBuffer = '';
+            return;
+          }
+
+          // Stream immediately unless buffer holds a suspect plant/percentage phrase still mid-sentence
+          if (!STREAM_CLAIM_SUSPECT_RE.test(pendingChatBuffer) && pendingChatBuffer.length < 180) {
+            // Hold tiny trailing partial words (<18 chars) only if they could start a trigger keyword;
+            // otherwise emit immediately with zero added latency.
+            if (!/\b(?:plant|cloth|scarf|100|99)$/i.test(pendingChatBuffer)) {
+              emitSanitizedChatSegment(
+                res,
+                pendingChatBuffer,
+                options.language,
+                sentModelHeader ? undefined : streamResult.model,
+              );
+              sentModelHeader = true;
+              pendingChatBuffer = '';
+            }
+            return;
+          }
+
+          // Flush up to the last sentence terminator once complete
+          const boundaryMatch = pendingChatBuffer.match(/^([\s\S]*?[.!?।\n])([\s\S]*)$/);
+          if (boundaryMatch) {
+            emitSanitizedChatSegment(
+              res,
+              boundaryMatch[1],
+              options.language,
+              sentModelHeader ? undefined : streamResult.model,
+            );
+            sentModelHeader = true;
+            pendingChatBuffer = boundaryMatch[2];
+          } else if (pendingChatBuffer.length > 260) {
+            emitSanitizedChatSegment(
+              res,
+              pendingChatBuffer,
+              options.language,
+              sentModelHeader ? undefined : streamResult.model,
+            );
+            sentModelHeader = true;
+            pendingChatBuffer = '';
+          }
+        };
+
+        if (options.contextType === 'plan') {
+          accumulatedPlanText += streamResult.firstChunk;
+          writeSseEvent(res, { chunk: streamResult.firstChunk, model: streamResult.model });
+        } else {
+          processChatChunk(streamResult.firstChunk, false);
+        }
 
         try {
           while (true) {
@@ -758,12 +876,58 @@ async function handleGeminiResponse(
             if (step.done) {
               break;
             }
+            const chunkFinish = step.value?.candidates?.[0]?.finishReason;
+            if (chunkFinish) {
+              lastFinishReason = chunkFinish;
+            }
             if (step.value?.text) {
-              writeSseEvent(res, { chunk: step.value.text });
+              if (options.contextType === 'plan') {
+                accumulatedPlanText += step.value.text;
+                writeSseEvent(res, { chunk: step.value.text });
+              } else {
+                processChatChunk(step.value.text, false);
+              }
             }
           }
-          writeSseEvent(res, { done: true, model: streamResult.model });
+
+          const truncated = lastFinishReason === 'MAX_TOKENS';
+          if (options.contextType === 'chat') {
+            processChatChunk('', true);
+            writeSseEvent(res, {
+              done: true,
+              model: streamResult.model,
+              truncated,
+              ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
+            });
+          } else {
+            const checkedPlan = tryParseValidPlanJson(accumulatedPlanText, options.language);
+            if (checkedPlan && checkedPlan.flaggedCount > 0) {
+              console.warn(
+                '[SafeAir Saathi] Scientific claim guard adjusted streamed plan items:',
+                {
+                  count: checkedPlan.flaggedCount,
+                },
+              );
+              writeSseEvent(res, {
+                replacementText: checkedPlan.json,
+                done: true,
+                model: streamResult.model,
+                truncated,
+                ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
+              });
+            } else {
+              writeSseEvent(res, {
+                done: true,
+                model: streamResult.model,
+                truncated,
+                ...(lastFinishReason ? { finishReason: lastFinishReason } : {}),
+              });
+            }
+          }
         } catch (midStreamErr: unknown) {
+          if (pendingChatBuffer) {
+            processChatChunk('', true);
+          }
           const { category, httpStatus } = classifyUpstreamError(midStreamErr);
           const diag = extractSafeErrorDiagnostics(midStreamErr);
           console.error(`[SafeAir Saathi] ${options.routeLabel} mid-stream failure:`, {
@@ -781,8 +945,6 @@ async function handleGeminiResponse(
         return;
       } catch (streamStartErr: unknown) {
         const { category } = classifyUpstreamError(streamStartErr);
-        // If auth/request/timeout caused pre-stream failure, surface cleanly without wasting extra call;
-        // otherwise fall back automatically to non-streaming JSON generation.
         if (category === 'invalid_key' || category === 'bad_request' || controller.signal.aborted) {
           throw streamStartErr;
         }
@@ -797,10 +959,11 @@ async function handleGeminiResponse(
       responseSchema: options.responseSchema,
       signal: controller.signal,
     });
+    const truncated = generated.finishReason === 'MAX_TOKENS';
 
     if (options.contextType === 'plan') {
-      let validPlanJson = tryParseValidPlanJson(generated.text);
-      if (!validPlanJson) {
+      let validPlan = tryParseValidPlanJson(generated.text, options.language);
+      if (!validPlan) {
         const repair = await generateNonStreamingWithRetry(ai, {
           routeLabel: options.routeLabel,
           contents: buildPlanRepairUserPrompt(generated.text, options.language),
@@ -808,10 +971,10 @@ async function handleGeminiResponse(
           responseSchema: options.responseSchema,
           signal: controller.signal,
         });
-        validPlanJson = tryParseValidPlanJson(repair.text);
+        validPlan = tryParseValidPlanJson(repair.text, options.language);
       }
 
-      if (!validPlanJson) {
+      if (!validPlan) {
         sendJson(res, 502, {
           error: getLocalizedApiErrorMessage('upstream_error', options.language, 'plan'),
           category: 'upstream_error' satisfies ApiErrorCategory,
@@ -819,18 +982,38 @@ async function handleGeminiResponse(
         return;
       }
 
+      if (validPlan.flaggedCount > 0) {
+        console.warn('[SafeAir Saathi] Scientific claim guard adjusted non-streaming plan:', {
+          count: validPlan.flaggedCount,
+        });
+      }
+
       sendJson(res, 200, {
-        text: validPlanJson,
+        text: validPlan.json,
         model: generated.model,
         nonStreaming: true,
+        truncated,
+        ...(generated.finishReason ? { finishReason: generated.finishReason } : {}),
       });
       return;
     }
 
+    const { text: sanitizedChatText, flaggedClaims } = sanitizeChatScientificClaims(
+      generated.text,
+      options.language,
+    );
+    if (flaggedClaims.length > 0) {
+      console.warn('[SafeAir Saathi] Scientific claim guard adjusted non-streaming chat:', {
+        count: flaggedClaims.length,
+      });
+    }
+
     sendJson(res, 200, {
-      text: generated.text,
+      text: sanitizedChatText,
       model: generated.model,
       nonStreaming: true,
+      truncated,
+      ...(generated.finishReason ? { finishReason: generated.finishReason } : {}),
     });
   } catch (err: unknown) {
     const { category, httpStatus } = classifyUpstreamError(err);

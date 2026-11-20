@@ -3,6 +3,7 @@ import { IMPACT_CHOICES, MAX_COMBINED_PM25_REDUCTION_PERCENT } from '../constant
 import type { TranslationDictionary } from '../i18n/translations.js';
 import type { ImpactChoiceId, Language } from '../types/index.js';
 import { calculateWeeklyImpact, formatApproxCo2 } from '../utils/impactCalculator.js';
+import { ImpactSwapIllustration, LazyIllustrationGate } from './illustrations/index.js';
 
 interface ImpactCalculatorProps {
   t: TranslationDictionary;
@@ -109,9 +110,12 @@ export const ImpactCalculator = memo(function ImpactCalculator({
                   type="checkbox"
                   checked={isChecked}
                   onChange={() => toggleChoice(choice.id)}
-                  className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded border-slate-400 text-teal-700"
+                  className="mt-1 h-5 w-5 shrink-0 cursor-pointer rounded border-slate-400 text-teal-700"
                 />
-                <div className="space-y-1">
+                <LazyIllustrationGate minHeightClass="w-9 h-9 shrink-0">
+                  <ImpactSwapIllustration choiceId={choice.id} className="w-9 h-9 shrink-0" />
+                </LazyIllustrationGate>
+                <div className="min-w-0 flex-1 space-y-1">
                   <label
                     htmlFor={checkboxId}
                     className="block cursor-pointer text-sm font-semibold text-slate-900 dark:text-slate-100"

@@ -10,28 +10,41 @@ import { clearAqiCache } from '../../src/services/airQuality.js';
 import { resetGeminiClientState } from '../../src/services/gemini.js';
 import { clearReverseGeocodeCache } from '../../src/services/geocoding.js';
 import { createManualAirQualityReading } from '../../src/utils/aqi.js';
-import { loadLanguagePreference, saveLanguagePreference } from '../../src/utils/storage.js';
+import {
+  loadAnimationsPausedPreference,
+  loadLanguagePreference,
+  saveAnimationsPausedPreference,
+  saveLanguagePreference,
+} from '../../src/utils/storage.js';
 
-describe('Language storage helper', () => {
+describe('Language & animation storage helpers', () => {
   beforeEach(() => {
     window.localStorage.clear();
   });
 
-  it('defaults to English, persists Hindi, and recovers on storage errors', () => {
+  it('defaults to English, persists Hindi, persists animation pause state, and recovers on storage errors', () => {
     expect(loadLanguagePreference()).toBe('en');
     saveLanguagePreference('hi');
     expect(loadLanguagePreference()).toBe('hi');
+
+    expect(loadAnimationsPausedPreference()).toBe(false);
+    saveAnimationsPausedPreference(true);
+    expect(loadAnimationsPausedPreference()).toBe(true);
+    saveAnimationsPausedPreference(false);
+    expect(loadAnimationsPausedPreference()).toBe(false);
 
     const getSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('Blocked');
     });
     expect(loadLanguagePreference()).toBe('en');
+    expect(loadAnimationsPausedPreference()).toBe(false);
     getSpy.mockRestore();
 
     const setSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('Quota exceeded');
     });
     expect(() => saveLanguagePreference('en')).not.toThrow();
+    expect(() => saveAnimationsPausedPreference(true)).not.toThrow();
     setSpy.mockRestore();
   });
 });

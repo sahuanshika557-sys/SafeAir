@@ -18,6 +18,7 @@ import { getLocalizedApiErrorMessage } from '../utils/errorDiagnostics.js';
 import { sanitizeActionPlanImpact } from '../utils/impactCalculator.js';
 import { createLinkedTimeoutController, isAbortError } from '../utils/network.js';
 import { SlidingWindowRateLimiter } from '../utils/rateLimiter.js';
+import { sanitizePlanScientificClaims } from '../utils/scientificFilter.js';
 import { actionPlanSchema } from '../utils/validation.js';
 
 const planCache = new TtlCache<ActionPlan>(PLAN_CACHE_TTL_MS);
@@ -104,19 +105,23 @@ async function extractHttpErrorMessage(
 }
 
 /**
- * Parses Server-Sent Events lines from a fetch `ReadableStream` and forwards accumulated chunks.
+ * Parses Server-Sent Events lines from a fetch `ReadableStream` and forwards accumulated chunks,
+ * tracking server truncation metadata (`MAX_TOKENS` or unexpected mid-stream close).
  */
 async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onChunk: (text: string) => void,
   language: Language,
   serviceType: 'plan' | 'chat',
-): Promise<{ text: string; model?: string }> {
+): Promise<{ text: string; model?: string; truncated: boolean; finishReason?: string }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let accumulated = '';
   let modelUsed: string | undefined;
+  let sawDone = false;
+  let truncated = false;
+  let finishReason: string | undefined;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -138,11 +143,14 @@ async function readSseStream(
       }
       const parsed = JSON.parse(payloadStr) as {
         chunk?: string;
+        replacementText?: string;
         error?: string;
         errorType?: string;
         category?: string;
         model?: string;
         done?: boolean;
+        truncated?: boolean;
+        finishReason?: string;
       };
       if (parsed.model) {
         modelUsed = parsed.model;
@@ -158,14 +166,31 @@ async function readSseStream(
         }
         throw new Error(parsed.error);
       }
-      if (parsed.chunk) {
+      if (parsed.replacementText) {
+        accumulated = parsed.replacementText;
+        onChunk(accumulated);
+      } else if (parsed.chunk) {
         accumulated += parsed.chunk;
         onChunk(accumulated);
+      }
+      if (parsed.done) {
+        sawDone = true;
+        if (parsed.truncated || parsed.finishReason === 'MAX_TOKENS') {
+          truncated = true;
+        }
+        if (parsed.finishReason) {
+          finishReason = parsed.finishReason;
+        }
       }
     }
   }
 
-  return { text: accumulated, model: modelUsed };
+  // Detect mid-stream connection cut when partial output arrived without a done event
+  if (!sawDone && accumulated.trim().length > 0) {
+    truncated = true;
+  }
+
+  return { text: accumulated, model: modelUsed, truncated, finishReason };
 }
 
 async function readPlanOrChatResponseBody(
@@ -173,12 +198,14 @@ async function readPlanOrChatResponseBody(
   onProgress: (text: string) => void,
   language: Language,
   serviceType: 'plan' | 'chat',
-): Promise<{ text: string; model?: string }> {
+): Promise<{ text: string; model?: string; truncated: boolean; finishReason?: string }> {
   const contentType = response.headers?.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
     const jsonPayload = (await response.json()) as {
       text?: string;
       model?: string;
+      truncated?: boolean;
+      finishReason?: string;
       error?: string;
       category?: string;
     };
@@ -198,7 +225,12 @@ async function readPlanOrChatResponseBody(
     if (text) {
       onProgress(text);
     }
-    return { text, model: jsonPayload.model };
+    return {
+      text,
+      model: jsonPayload.model,
+      truncated: Boolean(jsonPayload.truncated || jsonPayload.finishReason === 'MAX_TOKENS'),
+      finishReason: jsonPayload.finishReason,
+    };
   }
 
   if (response.body) {
@@ -209,7 +241,7 @@ async function readPlanOrChatResponseBody(
   if (text) {
     onProgress(text);
   }
-  return { text };
+  return { text, truncated: false };
 }
 
 function parseAndValidatePlanText(
@@ -254,7 +286,8 @@ function parseAndValidatePlanText(
     modelUsed: meta.modelUsed,
   };
 
-  return sanitizeActionPlanImpact(basePlan, meta.language);
+  const { plan: scientificPlan } = sanitizePlanScientificClaims(basePlan, meta.language);
+  return sanitizeActionPlanImpact(scientificPlan, meta.language);
 }
 
 async function attemptPlanJsonRepair(params: {
@@ -439,9 +472,9 @@ export async function generatePersonalizedPlan(params: {
 
 /**
  * Streams a scoped follow-up chat response (or automatic non-streaming JSON fallback)
- * from `/api/chat`.
+ * from `/api/chat`. Reports truncation metadata via optional `onComplete` callback.
  *
- * @param params - Sanitized user question, bounded history, active AQI context, language, and stream callback.
+ * @param params - Sanitized user question, bounded history, active AQI context, language, stream callback, and completion hook.
  * @returns Full completed assistant reply text.
  */
 export async function streamFollowUpChat(params: {
@@ -455,6 +488,12 @@ export async function streamFollowUpChat(params: {
   };
   language: Language;
   onToken: (fullText: string) => void;
+  onComplete?: (meta: {
+    text: string;
+    truncated: boolean;
+    finishReason?: string;
+    model?: string;
+  }) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   consumeClientRateLimit(params.language, 'chat');
@@ -477,13 +516,19 @@ export async function streamFollowUpChat(params: {
       throw new Error(await extractHttpErrorMessage(response, params.language, 'chat'));
     }
 
-    const { text } = await readPlanOrChatResponseBody(
+    const result = await readPlanOrChatResponseBody(
       response,
       params.onToken,
       params.language,
       'chat',
     );
-    return text;
+    params.onComplete?.({
+      text: result.text,
+      truncated: result.truncated,
+      finishReason: result.finishReason,
+      model: result.model,
+    });
+    return result.text;
   } finally {
     cleanup();
   }

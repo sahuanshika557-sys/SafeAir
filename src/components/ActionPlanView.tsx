@@ -12,6 +12,13 @@ import type {
 } from '../types/index.js';
 import { cleanImpactText } from '../utils/impactCalculator.js';
 import { ShieldIcon, StopIcon, VolumeIcon } from './Icons.js';
+import {
+  BreathingLungsIllustration,
+  EmptyPlanIllustration,
+  ErrorStateIllustration,
+  LazyIllustrationGate,
+  PlanSectionIllustration,
+} from './illustrations/index.js';
 
 interface ActionPlanViewProps {
   t: TranslationDictionary;
@@ -25,6 +32,7 @@ interface ActionPlanViewProps {
   currentReading?: AirQualityReading | null;
   currentProfile?: LifestyleProfile;
   onRegenerateForCurrent?: () => void;
+  animationsPaused?: boolean;
 }
 
 const SECTION_ORDER: readonly PlanSectionKey[] = [
@@ -46,7 +54,7 @@ const RecommendationCard = memo(function RecommendationCard({
   const cleanedImpact = cleanImpactText(item.estimatedImpact, language);
 
   return (
-    <article className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-5 space-y-3">
+    <article className="safeair-card-enter rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-5 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">{item.title}</h3>
         {item.timeWindow && (
@@ -104,7 +112,8 @@ function buildWhyFitsSummary(
 
 /**
  * Displays the 4-section personalized plan with WAI-ARIA tabs, streaming skeleton,
- * stale-plan detection, personalization summary, Read Aloud control, and focus management.
+ * stale-plan detection, personalization summary, spot & breathing-lungs illustrations,
+ * Read Aloud control, and focus management.
  */
 export function ActionPlanView({
   t,
@@ -118,6 +127,7 @@ export function ActionPlanView({
   currentReading,
   currentProfile,
   onRegenerateForCurrent,
+  animationsPaused = false,
 }: ActionPlanViewProps): ReactElement {
   const [activeTab, setActiveTab] = useState<PlanSectionKey>('dailyRoutine');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -161,6 +171,9 @@ export function ActionPlanView({
       ? currentReading.category.labelHi
       : currentReading.category.labelEn
     : '';
+
+  const activeCategoryKey =
+    currentReading?.category.key ?? plan?.generatedForCategoryKey ?? 'unhealthy';
 
   const personalizationSummary = buildWhyFitsSummary(
     t,
@@ -280,14 +293,19 @@ export function ActionPlanView({
             role="alert"
             className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/50 p-4 text-red-900 dark:text-red-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-5"
           >
-            <div>
-              <p className="font-semibold">{t.geminiErrorTitle}</p>
-              <p className="text-sm mt-0.5">{error}</p>
-              {plan?.isFallback && (
-                <p className="text-xs mt-1 text-red-800 dark:text-red-200">
-                  {t.fallbackBannerNotice}
-                </p>
-              )}
+            <div className="flex items-start gap-3 min-w-0">
+              <LazyIllustrationGate minHeightClass="w-11 h-11 shrink-0">
+                <ErrorStateIllustration className="w-11 h-11 shrink-0" />
+              </LazyIllustrationGate>
+              <div className="min-w-0">
+                <p className="font-semibold">{t.geminiErrorTitle}</p>
+                <p className="text-sm mt-0.5">{error}</p>
+                {plan?.isFallback && (
+                  <p className="text-xs mt-1 text-red-800 dark:text-red-200">
+                    {t.fallbackBannerNotice}
+                  </p>
+                )}
+              </div>
             </div>
             <button
               type="button"
@@ -325,11 +343,14 @@ export function ActionPlanView({
         )}
 
         {!isGenerating && !plan && !error && (
-          <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center">
+          <div className="rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-8 text-center space-y-3">
+            <LazyIllustrationGate minHeightClass="h-16">
+              <EmptyPlanIllustration className="w-16 h-16 mx-auto" />
+            </LazyIllustrationGate>
             <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
               {t.planEmptyTitle}
             </h3>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
+            <p className="text-sm text-slate-600 dark:text-slate-400 max-w-xl mx-auto">
               {t.planEmptyBody}
             </p>
           </div>
@@ -390,13 +411,21 @@ export function ActionPlanView({
                       tabIndex={isActive ? 0 : -1}
                       onClick={() => setActiveTab(sectionKey)}
                       onKeyDown={(e) => handleTabKeyDown(e, idx)}
-                      className={`min-h-[44px] rounded-lg px-4 py-2 text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                      className={`inline-flex min-h-[44px] items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
                         isActive
                           ? 'bg-teal-800 text-white dark:bg-teal-700'
                           : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                       }`}
                     >
-                      {tabLabels[sectionKey]}
+                      <span>{tabLabels[sectionKey]}</span>
+                      {sectionKey === 'healthProtection' && (
+                        <BreathingLungsIllustration
+                          categoryKey={activeCategoryKey}
+                          accentHex={isActive ? '#ffffff' : currentReading?.category.accentHex}
+                          animationsPaused={animationsPaused}
+                          className="w-5 h-5 shrink-0"
+                        />
+                      )}
                     </button>
                   );
                 })}
@@ -415,15 +444,36 @@ export function ActionPlanView({
                     className="pt-5"
                   >
                     {isActive && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {plan[sectionKey].map((item, idx) => (
-                          <RecommendationCard
-                            key={`${sectionKey}-${idx}-${item.title}`}
-                            item={item}
-                            language={language}
-                            t={t}
-                          />
-                        ))}
+                      <div className="safeair-card-enter space-y-4">
+                        <div className="flex items-center gap-3">
+                          <LazyIllustrationGate minHeightClass="w-11 h-11 shrink-0">
+                            <PlanSectionIllustration
+                              sectionKey={sectionKey}
+                              className="w-11 h-11 shrink-0"
+                            />
+                          </LazyIllustrationGate>
+                          <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                            {tabLabels[sectionKey]}
+                          </h3>
+                          {sectionKey === 'healthProtection' && (
+                            <BreathingLungsIllustration
+                              categoryKey={activeCategoryKey}
+                              accentHex={currentReading?.category.accentHex}
+                              animationsPaused={animationsPaused}
+                              className="w-7 h-7 shrink-0"
+                            />
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {plan[sectionKey].map((item, idx) => (
+                            <RecommendationCard
+                              key={`${sectionKey}-${idx}-${item.title}`}
+                              item={item}
+                              language={language}
+                              t={t}
+                            />
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>

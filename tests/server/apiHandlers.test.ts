@@ -166,10 +166,10 @@ describe('Vercel serverless functions & shared server handlers', () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_MODEL;
 
-    expect(getPrimaryGeminiModel()).toBe('gemini-3.8-flash');
+    expect(getPrimaryGeminiModel()).toBe('gemini-3.5-flash-lite');
     expect(getGeminiModelCandidates()).toEqual([
-      'gemini-3.8-flash',
       'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
       'gemini-3.6-flash',
     ]);
 
@@ -182,10 +182,10 @@ describe('Vercel serverless functions & shared server handlers', () => {
     const healthUnconf = JSON.parse(unconfiguredRes.getBody());
     expect(healthUnconf.ok).toBe(true);
     expect(healthUnconf.keyConfigured).toBe(false);
-    expect(healthUnconf.model).toBe('gemini-3.8-flash');
+    expect(healthUnconf.model).toBe('gemini-3.5-flash-lite');
     expect(healthUnconf.fallbackModels).toEqual([
-      'gemini-3.8-flash',
       'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
       'gemini-3.6-flash',
     ]);
     expect(healthUnconf.runtime).toBe('nodejs');
@@ -194,8 +194,8 @@ describe('Vercel serverless functions & shared server handlers', () => {
     process.env.GEMINI_MODEL = 'gemini-4-hydrogen';
     expect(getGeminiModelCandidates()).toEqual([
       'gemini-4-hydrogen',
-      'gemini-3.8-flash',
       'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
       'gemini-3.6-flash',
     ]);
     const configuredReq = createMockRequest({ method: 'GET', url: '/api/health' });
@@ -433,7 +433,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
       profile: DEFAULT_PROFILE,
     };
 
-    // 1. Primary 429 once -> retries and succeeds with SSE on gemini-3.8-flash (with thinkingConfig LOW, no temperature/maxOutputTokens)
+    // 1. Primary 429 once -> retries and succeeds with SSE on gemini-3.5-flash-lite (thinkingConfig MINIMAL + maxOutputTokens 4096)
     const generateContentStream = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 }))
@@ -460,10 +460,12 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(sseRes.res.statusCode).toBe(200);
     expect(sseRes.headers['content-type']).toContain('text/event-stream');
     expect(generateContentStream).toHaveBeenCalledTimes(2);
-    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.8-flash');
-    expect(generateContentStream.mock.calls[0][0].config).toHaveProperty('thinkingConfig');
+    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash-lite');
+    expect(generateContentStream.mock.calls[0][0].config).toMatchObject({
+      maxOutputTokens: 4096,
+      thinkingConfig: { thinkingLevel: 'MINIMAL' },
+    });
     expect(generateContentStream.mock.calls[0][0].config).not.toHaveProperty('temperature');
-    expect(generateContentStream.mock.calls[0][0].config).not.toHaveProperty('maxOutputTokens');
     expect(sseRes.getBody()).toContain('Morning indoor prep');
     expect(sseRes.getBody()).toContain('"done":true');
 
@@ -489,8 +491,11 @@ describe('Vercel serverless functions & shared server handlers', () => {
     const chatFallbackRes = createMockResponse();
     await chatHandler(chatFallbackReq, chatFallbackRes.res);
     expect(chatFallbackRes.res.statusCode).toBe(200);
-    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.8-flash');
-    expect(generateContentStream.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
+    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.5-flash-lite');
+    expect(generateContentStream.mock.calls[0][0].config).toMatchObject({
+      maxOutputTokens: 2400,
+    });
+    expect(generateContentStream.mock.calls[1][0].model).toBe('gemini-3.8-flash');
     expect(generateContentStream.mock.calls[2][0].model).toBe('gemini-3.6-flash');
     expect(chatFallbackRes.getBody()).toContain('N95 masks.');
 
@@ -685,8 +690,9 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(jsonChatRes.res.statusCode).toBe(200);
     expect(JSON.parse(jsonChatRes.getBody())).toEqual({
       text: 'Run HEPA purifier tonight.',
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3.5-flash-lite',
       nonStreaming: true,
+      truncated: false,
     });
 
     // 3. Exhausted 429 retries on both stream + fallback models returns 429 quota_exceeded
@@ -1050,7 +1056,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(missingKeyProbeRes.res.statusCode).toBe(503);
     expect(JSON.parse(missingKeyProbeRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 503,
       category: 'missing_key',
     });
@@ -1074,7 +1080,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(okProbeRes.headers['cache-control']).toBe('no-store');
     expect(JSON.parse(okProbeRes.getBody())).toEqual({
       ok: true,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 200,
       category: null,
     });
@@ -1097,7 +1103,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(unavailableRes.getBody()).not.toContain('Raw secret');
     expect(JSON.parse(unavailableRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 404,
       category: 'model_unavailable',
     });
@@ -1118,7 +1124,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(badKeyRes.res.statusCode).toBe(502);
     expect(JSON.parse(badKeyRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 401,
       category: 'invalid_key',
     });
@@ -1137,7 +1143,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(timeoutRes.res.statusCode).toBe(504);
     expect(JSON.parse(timeoutRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 504,
       category: 'timeout',
     });
@@ -1155,7 +1161,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(rateLimitedRes.res.statusCode).toBe(429);
     expect(JSON.parse(rateLimitedRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 429,
       category: 'quota_exceeded',
     });
@@ -1175,9 +1181,144 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(upstreamRes.res.statusCode).toBe(502);
     expect(JSON.parse(upstreamRes.getBody())).toEqual({
       ok: false,
-      modelTried: 'gemini-3.8-flash',
+      modelTried: 'gemini-3.5-flash-lite',
       status: 502,
       category: 'upstream_error',
     });
+  });
+
+  it('tracks MAX_TOKENS truncation and applies server-side scientific accuracy sanitization on plan and chat', async () => {
+    const basePlanBody = {
+      language: 'en',
+      location: DEFAULT_LOCATION,
+      airQuality: createManualAirQualityReading(220),
+      profile: DEFAULT_PROFILE,
+    };
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    // 1. Streaming /api/plan containing houseplant & 100% filtration myth -> emits replacementText SSE event
+    const mythPlan = {
+      ...VALID_PLAN_OBJ,
+      indoorAirHacks: [
+        {
+          title: 'Keep snake plants indoors',
+          detail: 'Keep snake plants in bedroom to purify PM2.5.',
+          whyItHelps: 'Removes 100% of toxins naturally.',
+          estimatedImpact: '15%–25% cleaner indoor air',
+        },
+      ],
+    };
+    const mythPlanJson = JSON.stringify(mythPlan);
+    const generateContentStream = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createAsyncChunksStream([mythPlanJson.slice(0, 70), mythPlanJson.slice(70)]),
+      );
+    const generateContent = vi.fn();
+
+    setServerAiTestOverrides({
+      aiClient: { models: { generateContentStream, generateContent } as never },
+      retryDelayBaseMs: 1,
+      totalTimeoutMs: 500,
+    });
+
+    const planStreamRes = createMockResponse();
+    await planHandler(
+      createMockRequest({
+        method: 'POST',
+        url: '/api/plan',
+        headers: { 'x-forwarded-for': '198.51.100.31' },
+        body: basePlanBody,
+      }),
+      planStreamRes.res,
+    );
+    expect(planStreamRes.res.statusCode).toBe(200);
+    expect(planStreamRes.getBody()).toContain('replacementText');
+    const replacementMatch = planStreamRes.getBody().match(/"replacementText":"((?:[^"\\]|\\.)*)"/);
+    expect(replacementMatch).not.toBeNull();
+    const replacedJson = JSON.parse(`"${replacementMatch![1]}"`);
+    expect(replacedJson).toContain('box-fan');
+    expect(replacedJson).not.toContain('Removes 100% of toxins');
+
+    // 2. Streaming /api/chat with MAX_TOKENS finishReason + scientific myth sanitization
+    generateContentStream.mockReset();
+    generateContentStream.mockResolvedValueOnce({
+      async *[Symbol.asyncIterator]() {
+        yield { text: 'Keep a snake plant to purify indoor air and ' };
+        yield {
+          text: 'block 100% of smoke.',
+          candidates: [{ finishReason: 'MAX_TOKENS' }],
+        };
+      },
+    });
+
+    const chatStreamRes = createMockResponse();
+    await chatHandler(
+      createMockRequest({
+        method: 'POST',
+        url: '/api/chat',
+        headers: { 'x-forwarded-for': '198.51.100.32' },
+        body: {
+          language: 'en',
+          message: 'Do plants clean indoor smog?',
+          history: [],
+          context: { locationName: 'Delhi', usAqi: 220, categoryLabel: 'Very Unhealthy' },
+        },
+      }),
+      chatStreamRes.res,
+    );
+    expect(chatStreamRes.res.statusCode).toBe(200);
+    const chatSseBody = chatStreamRes.getBody();
+    expect(chatSseBody).toContain('"finishReason":"MAX_TOKENS"');
+    expect(chatSseBody).toContain('"truncated":true');
+    expect(chatSseBody).not.toContain('block 100% of smoke');
+
+    // 3. Non-streaming /api/chat with MAX_TOKENS + Hindi myth sanitization
+    generateContent.mockResolvedValueOnce({
+      text: 'कमरे में स्नेक प्लांट हवा शुद्ध करते हैं और कपड़े का मास्क PM2.5 रोकता है।',
+      candidates: [{ finishReason: 'MAX_TOKENS' }],
+    });
+
+    const hiChatRes = createMockResponse();
+    await chatHandler(
+      createMockRequest({
+        method: 'POST',
+        url: '/api/chat',
+        headers: { 'x-forwarded-for': '198.51.100.33', accept: 'application/json' },
+        body: {
+          language: 'hi',
+          message: 'क्या पौधे हवा साफ करते हैं?',
+          history: [],
+          context: { locationName: 'नई दिल्ली', usAqi: 220, categoryLabel: 'बहुत अस्वस्थ' },
+        },
+      }),
+      hiChatRes.res,
+    );
+    expect(hiChatRes.res.statusCode).toBe(200);
+    const parsedHiChat = JSON.parse(hiChatRes.getBody());
+    expect(parsedHiChat.truncated).toBe(true);
+    expect(parsedHiChat.finishReason).toBe('MAX_TOKENS');
+    expect(parsedHiChat.text).toContain('HEPA');
+    expect(parsedHiChat.text).toContain('N95');
+
+    // 4. Non-streaming /api/plan with scientific myth sanitization
+    generateContent.mockResolvedValueOnce({ text: mythPlanJson });
+    const nonStreamMythPlanRes = createMockResponse();
+    await planHandler(
+      createMockRequest({
+        method: 'POST',
+        url: '/api/plan',
+        headers: { 'x-forwarded-for': '198.51.100.34' },
+        body: { ...basePlanBody, stream: false },
+      }),
+      nonStreamMythPlanRes.res,
+    );
+    expect(nonStreamMythPlanRes.res.statusCode).toBe(200);
+    const parsedNonStreamPlan = JSON.parse(nonStreamMythPlanRes.getBody());
+    expect(parsedNonStreamPlan.text).toContain('HEPA');
+    expect(parsedNonStreamPlan.text).not.toContain('Removes 100% of toxins');
+
+    warnSpy.mockRestore();
   });
 });

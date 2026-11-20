@@ -21,7 +21,8 @@ All API routes run in Node.js (both in local Express via `server.ts` and Vercel 
 3. **Prompt-Injection & Output Safety**
    - User-provided strings and location metadata are enclosed inside explicit `<<<USER_DATA_START>>>` and `<<<USER_DATA_END>>>` delimiters (`src/utils/promptBuilder.ts`) paired with data-only system instructions.
    - `@google/genai` safety settings block `BLOCK_MEDIUM_AND_ABOVE` across Harassment, Hate Speech, Sexually Explicit, and Dangerous Content.
-   - AI chat responses render through `react-markdown` with raw HTML disabled (`allowedElements: ['p', 'ul', 'ol', 'li', 'strong', 'em', 'code']`, `unwrapDisallowed`) in `src/components/FollowUpChat.tsx`. No `dangerouslySetInnerHTML` is used anywhere.
+   - AI chat responses render through a custom zero-HTML `SafeMarkdown` component (`src/components/SafeMarkdown.tsx`, `src/utils/safeMarkdown.ts`) supporting only bold, italic, ordered/unordered lists, and line breaks—React escapes all text nodes natively without `dangerouslySetInnerHTML` or external markdown libraries.
+   - Server-side and client-side scientific accuracy sanitization (`src/utils/scientificFilter.ts`) strips unsupported houseplant PM2.5 purification, unrealistic filtration (`100%`/`99.9%+`), and cloth-mask PM2.5 claims across both `/api/plan` and `/api/chat`.
 
 4. **HTTP Headers, CSP, and Origin Protections**
    - `vercel.json`, `server.ts`, and `index.html` enforce:
@@ -37,7 +38,7 @@ All API routes run in Node.js (both in local Express via `server.ts` and Vercel 
 
 6. **Privacy & Location Handling**
    - Browser geolocation executes only on explicit user click (`Use My Location`); coordinates exist solely in transient React state and are never logged, sent to analytics, or written to cookies/`localStorage`.
-   - Only the UI language preference (`'en'` | `'hi'`) is stored in `localStorage`.
+   - Only UI preferences—language (`'en'` | `'hi'` under `safeair_saathi_language`) and animation pause (`'true'` | `'false'` under `safeair_saathi_animations_paused`)—are stored in `localStorage`.
 
 ## Reporting a Vulnerability
 

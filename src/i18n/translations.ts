@@ -22,7 +22,15 @@ export interface TranslationDictionary {
   themeToggleDark: string;
   heroEyebrow: string;
   heroTitle: string;
+  heroTagline: string;
   heroSubtitle: string;
+  heroIllustrationClearLabel: (locationName: string, categoryLabel: string) => string;
+  heroIllustrationHazyLabel: (locationName: string, categoryLabel: string) => string;
+  heroIllustrationDenseLabel: (locationName: string, categoryLabel: string) => string;
+  thoughtCardTitle: string;
+  thoughtPauseBtn: string;
+  thoughtPlayBtn: string;
+  cleanAirThoughts: readonly string[];
   citySearchLabel: string;
   citySearchPlaceholder: string;
   citySearchBtn: string;
@@ -116,9 +124,15 @@ export interface TranslationDictionary {
   chatEmptyError: string;
   chatIncompleteError: string;
   chatUnavailableError: string;
+  chatTruncatedNotice: string;
+  chatContinueBtn: string;
+  chatShowMoreLabel: string;
+  chatContinuePrompt: string;
   errorBoundaryBody: string;
   errorBoundaryRetry: string;
   footerText: string;
+  animationsPauseBtn: string;
+  animationsResumeBtn: string;
 }
 
 export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
@@ -136,8 +150,28 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     themeToggleDark: 'Dark mode',
     heroEyebrow: 'Winter Smog & Urban Air Companion',
     heroTitle: 'Breathe safer with practical daily guidance tailored to your home.',
+    heroTagline: 'Every breath counts. Choose cleaner air.',
     heroSubtitle:
       'Live local air quality paired with low-emission routines, indoor air hacks, budget-matched alternatives, and honest impact estimates.',
+    heroIllustrationClearLabel: (locationName: string, categoryLabel: string) =>
+      `Illustrated city skyline with clear sky and calm mist for ${locationName} (${categoryLabel} air quality)`,
+    heroIllustrationHazyLabel: (locationName: string, categoryLabel: string) =>
+      `Illustrated city skyline with drifting amber-grey haze layers for ${locationName} (${categoryLabel} air quality)`,
+    heroIllustrationDenseLabel: (locationName: string, categoryLabel: string) =>
+      `Illustrated city skyline with dense winter smog haze layers for ${locationName} (${categoryLabel} air quality)`,
+    thoughtCardTitle: 'Clean-air thought',
+    thoughtPauseBtn: 'Pause thoughts',
+    thoughtPlayBtn: 'Resume thoughts',
+    cleanAirThoughts: [
+      'A 15-minute afternoon window check beats guessing when morning smog lingers.',
+      'Taking the Metro on foggy mornings keeps tailpipe emissions off neighborhood streets.',
+      'Wet-mopping floors settles fine winter dust instead of kicking it back into the room.',
+      'A snug nose clip on an N95 mask matters just as much as the filter rating itself.',
+      'Composting fallen leaves instead of burning them spares an entire block from toxic smoke.',
+      'Running a kitchen exhaust while cooking stops indoor smoke from lingering for hours.',
+      'Sealing drafty window gaps at night slows outside winter smog from sneaking inside.',
+      'Choosing short daytime walks in low-AQI hours keeps families active without peak exposure.',
+    ],
     citySearchLabel: 'Search city or town',
     citySearchPlaceholder: 'Type a city (e.g., Delhi, Lucknow, Patna)...',
     citySearchBtn: 'Search',
@@ -271,11 +305,18 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     chatIncompleteError:
       'I could not complete that reply. Please rephrase your air quality or health protection question.',
     chatUnavailableError: 'Chat is temporarily unavailable. Please try again shortly.',
+    chatTruncatedNotice: 'Response reached the single-message limit before finishing.',
+    chatContinueBtn: 'Continue',
+    chatShowMoreLabel: 'Show more of this answer',
+    chatContinuePrompt:
+      'Please continue and finish your previous answer concisely without repeating earlier points.',
     errorBoundaryBody:
       'Something went wrong while displaying this section. Please reload this panel.',
     errorBoundaryRetry: 'Try Again',
     footerText:
       'SafeAir Saathi · Built for families navigating winter smog · No cookies or location tracking.',
+    animationsPauseBtn: 'Pause animations',
+    animationsResumeBtn: 'Resume animations',
   },
   hi: {
     skipToContent: 'मुख्य सामग्री पर जाएँ',
@@ -291,8 +332,28 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     themeToggleDark: 'डार्क मोड',
     heroEyebrow: 'सर्दियों के स्मॉग और शहरी वायु प्रदूषण के लिए साथी',
     heroTitle: 'अपने घर और परिवार के अनुसार सुरक्षित व कम-प्रदूषण वाली दैनिक सलाह पाएँ।',
+    heroTagline: 'हर साँस मायने रखती है, साफ़ हवा चुनें।',
     heroSubtitle:
       'लाइव स्थानीय AQI के साथ कम-उत्सर्जन दिनचर्या, घर के भीतर हवा सुधारने के उपाय, बजट के अनुसार टिकाऊ विकल्प और अनुमानित प्रभाव जानें।',
+    heroIllustrationClearLabel: (locationName: string, categoryLabel: string) =>
+      `${locationName} के लिए साफ़ आकाश और हल्के वातावरण वाला शहरी दृश्य (${categoryLabel} वायु गुणवत्ता)`,
+    heroIllustrationHazyLabel: (locationName: string, categoryLabel: string) =>
+      `${locationName} के लिए हल्की नारंगी-सलेटी धुंध वाला शहरी दृश्य (${categoryLabel} वायु गुणवत्ता)`,
+    heroIllustrationDenseLabel: (locationName: string, categoryLabel: string) =>
+      `${locationName} के लिए घने सर्दियों के स्मॉग वाला शहरी दृश्य (${categoryLabel} वायु गुणवत्ता)`,
+    thoughtCardTitle: 'स्वच्छ हवा विचार',
+    thoughtPauseBtn: 'विचार रोकें',
+    thoughtPlayBtn: 'विचार चलाएँ',
+    cleanAirThoughts: [
+      'दोपहर में 15 मिनट सही समय पर खिड़की खोलना सुबह के स्मॉग को अंदर आने से बचाता है।',
+      'कोहरे भरी सुबह में मेट्रो का चुनाव मोहल्ले की सड़कों से वाहनों का धुआँ कम करता है।',
+      'सूखी झाड़ू के बजाय गीला पोंछा लगाने से जमी धूल फिर से हवा में नहीं उड़ती।',
+      'N95 मास्क तभी असरदार होता है जब नाक की क्लिप चेहरे पर बिना खाली जगह के ठीक बैठे।',
+      'सूखे पत्तों को जलाने के बजाय खाद बनाने से पूरे पड़ोस को जहरीले धुएँ से बचाया जा सकता है।',
+      'खाना पकाते समय एग्जॉस्ट फैन चलाने से घर के भीतर धुआँ घंटों तक जमा नहीं रहता।',
+      'रात में खिड़कियों की दरारें सील करने से बाहरी स्मॉग का घर में प्रवेश काफी घटता है।',
+      'कम-AQI वाले दोपहर के घंटों में हल्की सैर परिवार को सुरक्षित रखते हुए सक्रिय बनाती है।',
+    ],
     citySearchLabel: 'शहर या कस्बा खोजें',
     citySearchPlaceholder: 'शहर का नाम लिखें (जैसे दिल्ली, लखनऊ, पटना)...',
     citySearchBtn: 'खोजें',
@@ -420,9 +481,15 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     chatIncompleteError:
       'मैं यह उत्तर पूरा नहीं कर सका। कृपया वायु गुणवत्ता या स्वास्थ्य सुरक्षा से जुड़ा अपना प्रश्न दोबारा लिखें।',
     chatUnavailableError: 'चैट अभी अस्थायी रूप से उपलब्ध नहीं है। कृपया कुछ क्षण बाद प्रयास करें।',
+    chatTruncatedNotice: 'उत्तर पूरा होने से पहले संदेश सीमा तक पहुँच गया।',
+    chatContinueBtn: 'जारी रखें',
+    chatShowMoreLabel: 'इस उत्तर का शेष भाग दिखाएँ',
+    chatContinuePrompt: 'कृपया पहले अधूरा रहा उत्तर दोहराए बिना संक्षेप में पूरा करें।',
     errorBoundaryBody: 'इस अनुभाग को दिखाने में समस्या आई। कृपया इस पैनल को पुनः लोड करें।',
     errorBoundaryRetry: 'पुनः प्रयास करें',
     footerText:
       'सेफएयर साथी · सर्दियों के स्मॉग में परिवारों की सहायता के लिए · कोई कुकीज़ या लोकेशन ट्रैकिंग नहीं।',
+    animationsPauseBtn: 'एनिमेशन रोकें',
+    animationsResumeBtn: 'एनिमेशन चलाएँ',
   },
 };

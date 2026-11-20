@@ -158,6 +158,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   isError?: boolean;
+  isTruncated?: boolean;
 }
 
 /**

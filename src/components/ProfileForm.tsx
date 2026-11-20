@@ -316,7 +316,9 @@ export function ProfileForm({
             type="submit"
             disabled={isGenerating || !hasReading}
             aria-busy={isGenerating}
-            className="inline-flex min-h-[48px] items-center justify-center rounded-lg bg-teal-800 px-6 py-3 text-base font-semibold text-white hover:bg-teal-900 dark:bg-teal-700 dark:hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-60 transition-colors"
+            className={`inline-flex min-h-[48px] items-center justify-center rounded-lg bg-teal-800 px-6 py-3 text-base font-semibold text-white hover:bg-teal-900 dark:bg-teal-700 dark:hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-60 transition-colors ${
+              isGenerating ? 'safeair-btn-loading-pulse' : ''
+            }`}
           >
             {isGenerating ? t.generatingPlanBtn : t.generatePlanBtn}
           </button>

@@ -1,9 +1,11 @@
-import { useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useState, type FormEvent, type ReactElement } from 'react';
 import { MAX_US_AQI, MIN_US_AQI } from '../constants/index.js';
 import type { TranslationDictionary } from '../i18n/translations.js';
 import type { AirQualityReading, Language, LocationData } from '../types/index.js';
 import { formatAqiTimestamp } from '../utils/aqi.js';
+import { CleanAirThoughtCard } from './CleanAirThoughtCard.js';
 import { AqiStatusIcon, LocateIcon, RefreshIcon, SearchIcon } from './Icons.js';
+import { ErrorStateIllustration, HeroSkylineIllustration } from './illustrations/index.js';
 
 interface AqiHeroCardProps {
   t: TranslationDictionary;
@@ -25,22 +27,70 @@ interface AqiHeroCardProps {
   geoError: string | null;
   onApplyManualAqi: (aqi: number) => { success: boolean; error?: string };
   onRefreshAqi: () => void;
+  animationsPaused?: boolean;
 }
 
 /**
- * Accessible SVG semi-circular AQI gauge with a mandatory localized text alternative.
+ * Accessible SVG semi-circular AQI gauge animating smoothly from 0 to current value
+ * on load and value changes (unless animations are paused or reduced motion is active).
  */
 function AqiGauge({
   aqi,
   accentHex,
   ariaLabel,
+  animationsPaused,
 }: {
   aqi: number;
   accentHex: string;
   ariaLabel: string;
+  animationsPaused: boolean;
 }): ReactElement {
-  const clamped = Math.max(0, Math.min(500, aqi));
-  const fraction = clamped / 500;
+  const clampedTarget = Math.max(0, Math.min(500, Math.round(aqi)));
+  const canAnimate =
+    !animationsPaused &&
+    typeof window !== 'undefined' &&
+    typeof window.requestAnimationFrame === 'function';
+
+  const [animatedState, setAnimatedState] = useState<{ target: number; value: number }>(() => ({
+    target: clampedTarget,
+    value: canAnimate ? 0 : clampedTarget,
+  }));
+
+  useEffect(() => {
+    if (!canAnimate) {
+      return;
+    }
+
+    const durationMs = 650;
+    const startTime = performance.now();
+    let frameId = 0;
+
+    const tick = (now: number): void => {
+      const elapsed = Math.max(0, now - startTime);
+      const progress = Math.min(1, elapsed / durationMs);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setAnimatedState({
+        target: clampedTarget,
+        value: Math.round(clampedTarget * eased),
+      });
+      if (progress < 1) {
+        frameId = window.requestAnimationFrame(tick);
+      }
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+    return (): void => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [clampedTarget, canAnimate]);
+
+  const displayAqi = !canAnimate
+    ? clampedTarget
+    : animatedState.target === clampedTarget
+      ? animatedState.value
+      : 0;
+
+  const fraction = displayAqi / 500;
   const radius = 52;
   const circumference = Math.PI * radius;
   const dashOffset = circumference * (1 - fraction);
@@ -53,6 +103,8 @@ function AqiGauge({
         viewBox="0 0 140 84"
         role="img"
         aria-label={ariaLabel}
+        data-target-aqi={clampedTarget}
+        data-displayed-aqi={displayAqi}
         className="overflow-visible"
       >
         <path
@@ -78,7 +130,7 @@ function AqiGauge({
           textAnchor="middle"
           className="fill-slate-900 dark:fill-slate-100 text-3xl font-bold tabular-nums"
         >
-          {aqi}
+          {displayAqi}
         </text>
       </svg>
     </div>
@@ -86,7 +138,8 @@ function AqiGauge({
 }
 
 /**
- * Renders the location selector (city search, geolocation, manual AQI last-resort fallback) and live AQI card.
+ * Renders the location selector (city search, geolocation, manual AQI last-resort fallback),
+ * AQI-reactive city skyline illustration, rotating Clean-air thought card, and live AQI card.
  */
 export function AqiHeroCard({
   t,
@@ -108,6 +161,7 @@ export function AqiHeroCard({
   geoError,
   onApplyManualAqi,
   onRefreshAqi,
+  animationsPaused = false,
 }: AqiHeroCardProps): ReactElement {
   const [showManualForm, setShowManualForm] = useState<boolean>(false);
   const [manualInput, setManualInput] = useState<string>('185');
@@ -163,7 +217,7 @@ export function AqiHeroCard({
       className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-8"
     >
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-start">
-        <div className="lg:col-span-7 space-y-5">
+        <div className="lg:col-span-7 space-y-5 min-w-0">
           <div>
             <p className="text-sm font-medium text-teal-800 dark:text-teal-300">{t.heroEyebrow}</p>
             <h1
@@ -172,7 +226,10 @@ export function AqiHeroCard({
             >
               {t.heroTitle}
             </h1>
-            <p className="mt-3 text-base leading-relaxed text-slate-600 dark:text-slate-300 max-w-2xl">
+            <p className="mt-1.5 text-sm sm:text-base font-semibold text-teal-800 dark:text-teal-300">
+              {t.heroTagline}
+            </p>
+            <p className="mt-2.5 text-base leading-relaxed text-slate-600 dark:text-slate-300 max-w-2xl">
               {t.heroSubtitle}
             </p>
           </div>
@@ -186,7 +243,7 @@ export function AqiHeroCard({
                 {t.citySearchLabel}
               </label>
               <div className="flex flex-col sm:flex-row gap-3">
-                <div className="relative flex-1">
+                <div className="relative flex-1 min-w-0">
                   <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-600 dark:text-slate-400">
                     <SearchIcon className="w-4 h-4" />
                   </span>
@@ -252,7 +309,7 @@ export function AqiHeroCard({
                     <button
                       type="button"
                       onClick={() => onSelectCity(city)}
-                      className="flex min-h-[44px] w-full items-center justify-between px-4 py-2.5 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      className="flex min-h-[44px] w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
                     >
                       <span className="font-medium">{city.name}</span>
                       <span className="text-xs text-slate-600 dark:text-slate-400">
@@ -336,9 +393,23 @@ export function AqiHeroCard({
               </form>
             )}
           </div>
+
+          <CleanAirThoughtCard t={t} animationsPaused={animationsPaused} />
         </div>
 
-        <div className="lg:col-span-5" aria-live="polite" aria-busy={isLoadingAqi}>
+        <div
+          className="lg:col-span-5 space-y-4 min-w-0"
+          aria-live="polite"
+          aria-busy={isLoadingAqi}
+        >
+          <HeroSkylineIllustration
+            categoryKey={reading?.category.key ?? 'moderate'}
+            locationName={locationDisplay}
+            categoryLabel={categoryLabel || (language === 'hi' ? 'मध्यम' : 'Moderate')}
+            t={t}
+            animationsPaused={animationsPaused}
+          />
+
           {isLoadingAqi && !reading ? (
             <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-6 space-y-4">
               <div className="h-5 w-40 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
@@ -349,18 +420,21 @@ export function AqiHeroCard({
           ) : aqiError && !reading ? (
             <div
               role="alert"
-              className="rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/60 p-6 text-red-900 dark:text-red-100 space-y-2"
+              className="rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/60 p-6 text-red-900 dark:text-red-100 flex items-start gap-4"
             >
-              <h2 className="text-base font-semibold">{t.aqiErrorTitle}</h2>
-              <p className="text-sm">{aqiError}</p>
+              <ErrorStateIllustration className="w-11 h-11 shrink-0" />
+              <div className="space-y-1.5 min-w-0">
+                <h2 className="text-base font-semibold">{t.aqiErrorTitle}</h2>
+                <p className="text-sm">{aqiError}</p>
+              </div>
             </div>
           ) : reading ? (
             <div
               className={`rounded-xl border ${reading.category.borderClass} ${reading.category.surfaceClass} p-6 space-y-4`}
             >
               <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-slate-600 dark:text-slate-300 break-words">
                     {locationDisplay}
                   </p>
                   <div className={`mt-1 flex items-center gap-2 ${reading.category.textClass}`}>
@@ -371,7 +445,7 @@ export function AqiHeroCard({
                     <span className="text-lg font-bold">{categoryLabel}</span>
                   </div>
                 </div>
-                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 shrink-0">
                   {t.aqiScaleLabel}
                 </span>
               </div>
@@ -380,6 +454,7 @@ export function AqiHeroCard({
                 aqi={reading.usAqi}
                 accentHex={reading.category.accentHex}
                 ariaLabel={t.aqiGaugeAriaLabel(reading.usAqi, categoryLabel)}
+                animationsPaused={animationsPaused}
               />
 
               <p className={`text-sm leading-relaxed ${reading.category.textClass}`}>
