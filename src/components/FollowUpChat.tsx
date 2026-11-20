@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MAX_FREE_TEXT_LENGTH } from '../constants/index.ts';
 import type { TranslationDictionary } from '../i18n/translations.ts';
@@ -37,6 +37,12 @@ export function FollowUpChat({
   const [inputError, setInputError] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return (): void => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
@@ -140,6 +146,7 @@ export function FollowUpChat({
       </div>
 
       <div
+        role="log"
         aria-live="polite"
         aria-label={t.chatHistoryLabel}
         className="space-y-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 min-h-[160px] max-h-[420px] overflow-y-auto"
@@ -170,7 +177,7 @@ export function FollowUpChat({
                   </ReactMarkdown>
                 </div>
               ) : (
-                <p className="text-slate-500 dark:text-slate-400">{t.chatSendingBtn}</p>
+                <p className="text-slate-600 dark:text-slate-400">{t.chatSendingBtn}</p>
               )}
             </div>
           ))
@@ -199,7 +206,7 @@ export function FollowUpChat({
             placeholder={t.chatPlaceholder}
             aria-invalid={Boolean(inputError)}
             aria-describedby={inputError ? 'chat-input-error' : undefined}
-            className="min-h-[44px] flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-500"
+            className="min-h-[44px] flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-600 dark:placeholder:text-slate-400"
           />
           <button
             type="submit"

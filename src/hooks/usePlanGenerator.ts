@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { generatePersonalizedPlan } from '../services/gemini.ts';
 import type {
   ActionPlan,
@@ -47,6 +47,12 @@ export function usePlanGenerator(): UsePlanGeneratorReturn {
     profile: LifestyleProfile;
     language: Language;
   } | null>(null);
+
+  useEffect(() => {
+    return (): void => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const generatePlan = useCallback(
     async (params: {

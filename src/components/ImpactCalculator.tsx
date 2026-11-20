@@ -66,6 +66,7 @@ export const ImpactCalculator = memo(function ImpactCalculator({
             aria-valuemin={0}
             aria-valuemax={MAX_COMBINED_PM25_REDUCTION_PERCENT}
             aria-valuenow={estimate.approxPm25ReductionPercent}
+            aria-valuetext={`~${estimate.approxPm25ReductionPercent}%`}
             className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"
           >
             <div

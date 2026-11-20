@@ -51,17 +51,43 @@ export interface ServerApiRequest extends IncomingMessage {
 export type ServerApiResponse = ServerResponse;
 
 const MAX_BODY_BYTES = 32 * 1024;
+const MAX_TRACKED_IPS = 500;
 
-const serverRateLimiter = new SlidingWindowRateLimiter(
-  RATE_LIMIT_MAX_REQUESTS * 2,
-  RATE_LIMIT_WINDOW_MS,
-);
+const rateLimitersByIp = new Map<string, SlidingWindowRateLimiter>();
+
+function getClientIp(req: ServerApiRequest): string {
+  const forwarded = req.headers?.['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim().slice(0, 80);
+  }
+  if (Array.isArray(forwarded) && typeof forwarded[0] === 'string' && forwarded[0].trim()) {
+    return forwarded[0].split(',')[0].trim().slice(0, 80);
+  }
+  const remoteAddr = req.socket?.remoteAddress;
+  return typeof remoteAddr === 'string' && remoteAddr.trim() ? remoteAddr.slice(0, 80) : 'local';
+}
+
+function consumePerIpRateLimit(req: ServerApiRequest) {
+  const ip = getClientIp(req);
+  let limiter = rateLimitersByIp.get(ip);
+  if (!limiter) {
+    if (rateLimitersByIp.size >= MAX_TRACKED_IPS) {
+      const oldestIp = rateLimitersByIp.keys().next().value;
+      if (oldestIp !== undefined) {
+        rateLimitersByIp.delete(oldestIp);
+      }
+    }
+    limiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX_REQUESTS * 2, RATE_LIMIT_WINDOW_MS);
+    rateLimitersByIp.set(ip, limiter);
+  }
+  return limiter.consume();
+}
 
 /**
- * Resets the server-side sliding-window rate limiter (intended for unit/integration tests).
+ * Resets all server-side per-IP sliding-window rate limiters (intended for unit/integration tests).
  */
 export function resetServerRateLimiter(): void {
-  serverRateLimiter.reset();
+  rateLimitersByIp.clear();
 }
 
 const MODEL_CANDIDATES = Array.from(new Set([GEMINI_MODEL, GEMINI_FALLBACK_MODEL]));
@@ -186,9 +212,19 @@ const chatRequestSchema = z.object({
   }),
 });
 
-function sendJson(res: ServerApiResponse, statusCode: number, payload: unknown): void {
+function sendJson(
+  res: ServerApiResponse,
+  statusCode: number,
+  payload: unknown,
+  cacheControl?: string,
+): void {
   res.statusCode = statusCode;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  if (cacheControl) {
+    res.setHeader('Cache-Control', cacheControl);
+  }
   res.end(JSON.stringify(payload));
 }
 
@@ -387,6 +423,8 @@ async function streamGeminiSseResponse(
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   if (typeof res.flushHeaders === 'function') {
     res.flushHeaders();
   }
@@ -431,7 +469,7 @@ async function proxyOpenMeteoJson(
       return;
     }
     const data: unknown = await upstream.json();
-    sendJson(res, 200, data);
+    sendJson(res, 200, data, 'public, s-maxage=300, stale-while-revalidate=60');
   } catch (err: unknown) {
     console.error(`[SafeAir Saathi] ${routeLabel} error:`, extractSafeErrorDiagnostics(err));
     sendJson(res, 502, { error: unreachableMessage });
@@ -522,7 +560,7 @@ export async function handlePlanRequest(
     return;
   }
 
-  const rate = serverRateLimiter.consume();
+  const rate = consumePerIpRateLimit(req);
   if (!rate.allowed) {
     sendJson(res, 429, { error: 'Too many plan requests. Please wait a minute and retry.' });
     return;
@@ -574,7 +612,7 @@ export async function handleChatRequest(
     return;
   }
 
-  const rate = serverRateLimiter.consume();
+  const rate = consumePerIpRateLimit(req);
   if (!rate.allowed) {
     sendJson(res, 429, { error: 'Too many chat requests. Please wait a minute and retry.' });
     return;

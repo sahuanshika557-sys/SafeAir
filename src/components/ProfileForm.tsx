@@ -298,7 +298,7 @@ export function ProfileForm({
             placeholder={t.notesPlaceholder}
             aria-invalid={Boolean(errors.notes)}
             aria-describedby={errors.notes ? 'profile-notes-error' : undefined}
-            className="mt-2 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-500"
+            className="mt-2 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2.5 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-600 dark:placeholder:text-slate-400"
           />
           {errors.notes && (
             <p

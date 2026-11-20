@@ -16,6 +16,13 @@ const PORT = 3000;
 async function startServer(): Promise<void> {
   const app = express();
   app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)');
+    next();
+  });
   app.use(express.json({ limit: '32kb' }));
 
   app.all('/api/geocode', (req: Request, res: Response): void => {

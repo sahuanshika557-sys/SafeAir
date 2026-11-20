@@ -158,7 +158,7 @@ export function ActionPlanView({
         )}
       </div>
 
-      <aside
+      <div
         role="note"
         aria-label={t.medicalDisclaimerTitle}
         className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-4 text-sm text-amber-950 dark:text-amber-100 flex items-start gap-3"
@@ -168,7 +168,7 @@ export function ActionPlanView({
           <p className="font-semibold">{t.medicalDisclaimerTitle}</p>
           <p className="mt-0.5 leading-relaxed">{t.medicalDisclaimerText}</p>
         </div>
-      </aside>
+      </div>
 
       <div aria-live="polite">
         {isGenerating && (
@@ -283,6 +283,7 @@ export function ActionPlanView({
                     id={`plan-panel-${sectionKey}`}
                     role="tabpanel"
                     aria-labelledby={`plan-tab-${sectionKey}`}
+                    tabIndex={isActive ? 0 : -1}
                     hidden={!isActive}
                     className="pt-5"
                   >

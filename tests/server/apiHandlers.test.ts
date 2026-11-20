@@ -17,12 +17,14 @@ function createMockRequest(options: {
   url: string;
   query?: Record<string, string>;
   body?: unknown;
+  headers?: Record<string, string>;
 }): ServerApiRequest {
   const req = new EventEmitter() as ServerApiRequest;
   req.method = options.method;
   req.url = options.url;
   req.query = options.query;
   req.body = options.body;
+  req.headers = options.headers ?? {};
   return req;
 }
 
@@ -129,6 +131,9 @@ describe('Vercel serverless functions & shared server handlers', () => {
     const goodAqiRes = createMockResponse();
     await aqiHandler(goodAqiReq, goodAqiRes.res);
     expect(goodAqiRes.res.statusCode).toBe(200);
+    expect(goodAqiRes.headers['x-content-type-options']).toBe('nosniff');
+    expect(goodAqiRes.headers['referrer-policy']).toBe('no-referrer');
+    expect(goodAqiRes.headers['cache-control']).toContain('s-maxage=300');
     expect(JSON.parse(goodAqiRes.getBody())).toEqual({ current: { us_aqi: 155 } });
   });
 
@@ -178,5 +183,53 @@ describe('Vercel serverless functions & shared server handlers', () => {
     await chatHandler(validChatReq, validChatRes.res);
     expect(validChatRes.res.statusCode).toBe(503);
     expect(JSON.parse(validChatRes.getBody()).error).toMatch(/एपीआई कुंजी कॉन्फ़िगर नहीं/);
+  });
+
+  it('isolates rate limits per client IP and enforces 429 on excess bursts', async () => {
+    delete process.env.GEMINI_API_KEY;
+
+    const validChatBody = {
+      language: 'en',
+      message: 'Should I run a purifier tonight?',
+      history: [],
+      context: {
+        locationName: 'New Delhi',
+        usAqi: 210,
+        categoryLabel: 'Very Unhealthy',
+      },
+    };
+
+    for (let i = 0; i < 20; i += 1) {
+      const req = createMockRequest({
+        method: 'POST',
+        url: '/api/chat',
+        body: validChatBody,
+        headers: { 'x-forwarded-for': '198.51.100.10' },
+      });
+      const res = createMockResponse();
+      await chatHandler(req, res.res);
+      expect(res.res.statusCode).toBe(503);
+    }
+
+    const blockedReq = createMockRequest({
+      method: 'POST',
+      url: '/api/chat',
+      body: validChatBody,
+      headers: { 'x-forwarded-for': '198.51.100.10' },
+    });
+    const blockedRes = createMockResponse();
+    await chatHandler(blockedReq, blockedRes.res);
+    expect(blockedRes.res.statusCode).toBe(429);
+
+    // Distinct IP must remain unaffected
+    const otherIpReq = createMockRequest({
+      method: 'POST',
+      url: '/api/chat',
+      body: validChatBody,
+      headers: { 'x-forwarded-for': '203.0.113.42' },
+    });
+    const otherIpRes = createMockResponse();
+    await chatHandler(otherIpReq, otherIpRes.res);
+    expect(otherIpRes.res.statusCode).toBe(503);
   });
 });

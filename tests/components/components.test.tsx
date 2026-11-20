@@ -4,6 +4,7 @@ import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
 import { ActionPlanView } from '../../src/components/ActionPlanView.tsx';
 import { AqiHeroCard } from '../../src/components/AqiHeroCard.tsx';
+import { ErrorBoundary } from '../../src/components/ErrorBoundary.tsx';
 import { FollowUpChat } from '../../src/components/FollowUpChat.tsx';
 import { Header } from '../../src/components/Header.tsx';
 import { ImpactCalculator } from '../../src/components/ImpactCalculator.tsx';
@@ -240,5 +241,128 @@ describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/enter a question/i);
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('supports keyboard tab navigation and Read Aloud in ActionPlanView', async () => {
+    const speakMock = vi.fn();
+    const cancelMock = vi.fn();
+    vi.stubGlobal('speechSynthesis', { speak: speakMock, cancel: cancelMock });
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        public text: string;
+        public lang = 'en-IN';
+        public rate = 1;
+        constructor(text: string) {
+          this.text = text;
+        }
+      },
+    );
+
+    const reading = createManualAirQualityReading(195);
+    const plan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'en');
+
+    render(
+      <ActionPlanView
+        t={TRANSLATIONS.en}
+        language="en"
+        plan={plan}
+        isGenerating={false}
+        streamCharCount={0}
+        error={null}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const routineTab = screen.getByRole('tab', { name: TRANSLATIONS.en.tabDailyRoutine });
+    routineTab.focus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: TRANSLATIONS.en.tabIndoorHacks })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await userEvent.keyboard('{End}');
+    expect(screen.getByRole('tab', { name: TRANSLATIONS.en.tabHealthProtection })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await userEvent.keyboard('{Home}');
+    expect(routineTab).toHaveAttribute('aria-selected', 'true');
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(screen.getByRole('tab', { name: TRANSLATIONS.en.tabHealthProtection })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: TRANSLATIONS.en.readAloudBtn }));
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('streams FollowUpChat markdown safely without rendering raw HTML tags (XSS guard)', async () => {
+    const encoder = new TextEncoder();
+    const ssePayload =
+      'Wear **N95** outdoors.<script>window.__xss=1</script><img src=x onerror=alert(1)>';
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk: ssePayload })}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        }),
+      ),
+    );
+
+    const reading = createManualAirQualityReading(180);
+    const { container } = render(
+      <FollowUpChat
+        t={TRANSLATIONS.en}
+        language="en"
+        location={DEFAULT_LOCATION}
+        reading={reading}
+        plan={null}
+      />,
+    );
+
+    const input = screen.getByLabelText(TRANSLATIONS.en.chatInputLabel);
+    await userEvent.type(input, 'Which mask is best?');
+    await userEvent.click(screen.getByRole('button', { name: TRANSLATIONS.en.chatSendBtn }));
+
+    await waitFor(() => {
+      expect(screen.getByText('N95')).toBeInTheDocument();
+    });
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('catches child errors in ErrorBoundary and recovers when retry is clicked', async () => {
+    const consoleErrSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let shouldThrow = true;
+    function FlakyPanel() {
+      if (shouldThrow) {
+        throw new Error('Render crash');
+      }
+      return <p>Panel recovered</p>;
+    }
+
+    render(
+      <ErrorBoundary sectionTitle="Air Quality" bodyText="Panel error" retryLabel="Try Again">
+        <FlakyPanel />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Panel error');
+    shouldThrow = false;
+    await userEvent.click(screen.getByRole('button', { name: 'Try Again' }));
+    expect(screen.getByText('Panel recovered')).toBeInTheDocument();
+    consoleErrSpy.mockRestore();
   });
 });

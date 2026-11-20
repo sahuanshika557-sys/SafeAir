@@ -136,7 +136,10 @@ describe('Custom hooks', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { result } = renderHook(() => useAirQuality());
+    const { result, rerender } = renderHook(
+      ({ lang }: { lang: 'en' | 'hi' }) => useAirQuality(lang),
+      { initialProps: { lang: 'en' as 'en' | 'hi' } },
+    );
     await waitFor(() => expect(result.current.isLoadingAqi).toBe(false));
     expect(result.current.reading?.usAqi).toBe(190);
 
@@ -147,6 +150,12 @@ describe('Custom hooks', () => {
       await result.current.submitCitySearch();
     });
     await waitFor(() => expect(result.current.location.name).toBe('Patna'));
+
+    // Switching language to Hindi must NOT overwrite Patna with default New Delhi
+    const callsBeforeLangSwitch = fetchMock.mock.calls.length;
+    rerender({ lang: 'hi' });
+    expect(result.current.location.name).toBe('Patna');
+    expect(fetchMock).toHaveBeenCalledTimes(callsBeforeLangSwitch);
 
     await act(async () => {
       await result.current.loadByCoordinates(26.84, 80.94, 'Lucknow');

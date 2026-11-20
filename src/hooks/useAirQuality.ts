@@ -70,6 +70,12 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
 
   const debouncedQuery = useDebounce(searchQuery, GEOCODING_DEBOUNCE_MS);
   const aqiAbortRef = useRef<AbortController | null>(null);
+  const searchSubmitAbortRef = useRef<AbortController | null>(null);
+  const languageRef = useRef<Language>(language);
+
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
 
   const loadAqiForLocation = useCallback(
     async (target: LocationData, bypassCache: boolean = false): Promise<void> => {
@@ -111,7 +117,7 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
 
     void fetchAirQuality(DEFAULT_LOCATION.latitude, DEFAULT_LOCATION.longitude, {
       signal: controller.signal,
-      language,
+      language: languageRef.current,
     })
       .then((nextReading) => {
         if (!controller.signal.aborted) {
@@ -124,7 +130,7 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
           return;
         }
         if (!controller.signal.aborted) {
-          setAqiError(resolveAqiErrorMessage(err, language));
+          setAqiError(resolveAqiErrorMessage(err, languageRef.current));
         }
       })
       .finally(() => {
@@ -135,8 +141,10 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
 
     return (): void => {
       controller.abort();
+      aqiAbortRef.current?.abort();
+      searchSubmitAbortRef.current?.abort();
     };
-  }, [language]);
+  }, []);
 
   const setSearchQuery = useCallback(
     (value: string): void => {
@@ -223,19 +231,28 @@ export function useAirQuality(language: Language = 'en'): UseAirQualityReturn {
       return;
     }
 
+    searchSubmitAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchSubmitAbortRef.current = controller;
     setIsSearching(true);
     setSearchError(null);
     try {
-      const cities = await searchCities(trimmed, undefined, language);
-      setSearchResults(cities);
-      setHasSearched(true);
-      if (cities.length > 0) {
-        selectCity(cities[0]);
+      const cities = await searchCities(trimmed, controller.signal, language);
+      if (!controller.signal.aborted) {
+        setSearchResults(cities);
+        setHasSearched(true);
+        if (cities.length > 0) {
+          selectCity(cities[0]);
+        }
       }
     } catch (err: unknown) {
-      setSearchError(resolveCitySearchErrorMessage(err, language));
+      if (!isAbortError(err) && !controller.signal.aborted) {
+        setSearchError(resolveCitySearchErrorMessage(err, language));
+      }
     } finally {
-      setIsSearching(false);
+      if (!controller.signal.aborted) {
+        setIsSearching(false);
+      }
     }
   }, [language, searchQuery, searchResults, selectCity]);
 

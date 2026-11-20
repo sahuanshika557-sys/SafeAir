@@ -328,4 +328,31 @@ describe('Service layer (Open-Meteo + Gemini SSE)', () => {
       }),
     ).rejects.toThrow(/Rate limit exceeded/i);
   });
+
+  it('enforces client-side 10 req/min rate limit across plan and chat requests', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(createSseResponse(['OK']))),
+    );
+
+    for (let i = 0; i < 10; i += 1) {
+      await streamFollowUpChat({
+        message: `Question ${i}`,
+        history: [],
+        context: { locationName: 'Delhi', usAqi: 200, categoryLabel: 'Unhealthy' },
+        language: 'en',
+        onToken: () => undefined,
+      });
+    }
+
+    await expect(
+      streamFollowUpChat({
+        message: 'Eleventh question',
+        history: [],
+        context: { locationName: 'Delhi', usAqi: 200, categoryLabel: 'Unhealthy' },
+        language: 'hi',
+        onToken: () => undefined,
+      }),
+    ).rejects.toThrow(/अनुरोध सीमा पूरी हो गई है/);
+  });
 });

@@ -98,5 +98,42 @@ describe('Rule-based fallback plan', () => {
     const hiPlan = buildRuleBasedFallbackPlan(reading, DEFAULT_PROFILE, 'hi');
     expect(hiPlan.isFallback).toBe(true);
     expect(hiPlan.dailyRoutine[0].estimatedImpact).toContain('लगभग');
+
+    const woodPurifierProfile = {
+      ...DEFAULT_PROFILE,
+      hasAirPurifier: true,
+      cookingFuel: 'wood' as const,
+      commuteMode: 'car' as const,
+      budget: 'low' as const,
+      household: [],
+    };
+    const tailoredEn = buildRuleBasedFallbackPlan(
+      createManualAirQualityReading(120),
+      woodPurifierProfile,
+      'en',
+    );
+    expect(tailoredEn.indoorAirHacks[1].title).toMatch(/HEPA purifier/i);
+    expect(tailoredEn.sustainableAlternatives[0].detail).toMatch(/induction/i);
+
+    const tailoredHi = buildRuleBasedFallbackPlan(
+      createManualAirQualityReading(120),
+      woodPurifierProfile,
+      'hi',
+    );
+    expect(tailoredHi.indoorAirHacks[1].title).toMatch(/HEPA/);
+
+    const sysPlanHi = buildPlanSystemInstruction('hi');
+    expect(sysPlanHi).toContain('Devanagari');
+    const chatPromptWithHistory = buildChatUserPrompt(
+      'Follow-up?',
+      [{ id: '1', role: 'user', content: 'Prior Q', timestamp: '2026-01-01T00:00:00Z' }],
+      {
+        locationName: 'Delhi',
+        usAqi: 210,
+        categoryLabel: 'Very Unhealthy',
+        planSummary: 'Summary',
+      },
+    );
+    expect(chatPromptWithHistory).toContain('Prior Q');
   });
 });

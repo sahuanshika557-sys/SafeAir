@@ -187,7 +187,7 @@ export function AqiHeroCard({
               </label>
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="relative flex-1">
-                  <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500">
+                  <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-600 dark:text-slate-400">
                     <SearchIcon className="w-4 h-4" />
                   </span>
                   <input
@@ -199,7 +199,7 @@ export function AqiHeroCard({
                     maxLength={100}
                     autoComplete="off"
                     aria-describedby={searchError ? 'city-search-error' : undefined}
-                    className="min-h-[44px] w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 pl-10 pr-4 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-500"
+                    className="min-h-[44px] w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 pl-10 pr-4 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-600 dark:placeholder:text-slate-400"
                   />
                 </div>
                 <button
