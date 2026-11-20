@@ -88,6 +88,9 @@ async function extractHttpErrorMessage(
   if (errorBody.error && !/\bhttp\s*\d{3}\b/i.test(errorBody.error)) {
     return errorBody.error;
   }
+  if (response.status === 401 || response.status === 403) {
+    return getLocalizedApiErrorMessage('invalid_key', language, serviceType);
+  }
   if (response.status === 429) {
     return getLocalizedApiErrorMessage('quota_exceeded', language, serviceType);
   }

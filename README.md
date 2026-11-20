@@ -9,7 +9,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8_Strict-3178c6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-8.3-646cff?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
 [![Vercel](https://img.shields.io/badge/Deployed_on-Vercel-000000?style=flat-square&logo=vercel&logoColor=white)](https://vercel.com/)
-[![Tests Passing](<https://img.shields.io/badge/Tests-66_Passing_(10_Suites)-15803d?style=flat-square>)](#testing)
+[![Tests Passing](<https://img.shields.io/badge/Tests-67_Passing_(10_Suites)-15803d?style=flat-square>)](#testing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](./LICENSE)
 
 > **Medical Disclaimer:** All guidance in SafeAir Saathi is for informational and educational purposes only and is **not medical advice**. Always consult a qualified healthcare professional for respiratory symptoms, asthma flare-ups, pregnancy care, or medical emergencies.
@@ -20,7 +20,7 @@
 
 > _"Create a GenAI-powered assistant that helps families and communities navigate severe winter smog and urban air pollution. It should suggest low-emission daily routines, indoor air quality hacks, and sustainable alternatives tailored to their location and lifestyle, while clearly explaining the direct impact of their choices."_
 
-SafeAir Saathi addresses this challenge by pairing live local air quality telemetry (`US AQI`, `PM2.5`, `PM10`, `NO₂`, and `O₃`) from Open-Meteo with a household lifestyle profile covering vulnerable members, commute mode, work setting, home type, air purifier ownership, cooking fuel, and budget tier. Using Google Gemini (`gemini-2.5-flash` with `GEMINI_MODEL` override support and automatic `gemini-2.5-flash-lite` fallback) over Server-Sent Events with automatic non-streaming JSON fallback, it produces a structured four-section action plan where every card explains **why it helps** and its **approximate** exposure or CO₂ impact without stale-plan confusion. An interactive weekly impact calculator (with diminishing returns and a transparent `65%` cap) and a domain-scoped follow-up Q&A assistant help families compare practical swaps without medical overclaiming. Resilient fallbacks—including manual US AQI entry, an immediate rule-based safety plan, and full English/Hindi parity—keep the assistant reliable under poor connectivity or API outages.
+SafeAir Saathi addresses this challenge by pairing live local air quality telemetry (`US AQI`, `PM2.5`, `PM10`, `NO₂`, and `O₃`) from Open-Meteo with a household lifestyle profile covering vulnerable members, commute mode, work setting, home type, air purifier ownership, cooking fuel, and budget tier. Using Google Gemini (default `gemini-3.8-flash`, with optional `GEMINI_MODEL` first-priority override and automatic ordered fallback across `gemini-3.8-flash` → `gemini-3.5-flash-lite` → `gemini-3.6-flash`) over Server-Sent Events with automatic non-streaming JSON fallback, it produces a structured four-section action plan where every card explains **why it helps** and its **approximate** exposure or CO₂ impact without stale-plan confusion. An interactive weekly impact calculator (with diminishing returns and a transparent `65%` cap) and a domain-scoped follow-up Q&A assistant help families compare practical swaps without medical overclaiming. Resilient fallbacks—including manual US AQI entry, an immediate rule-based safety plan, and full English/Hindi parity—keep the assistant reliable under poor connectivity or API outages.
 
 ---
 
@@ -81,7 +81,7 @@ SafeAir Saathi addresses this challenge by pairing live local air quality teleme
 
 See [SECURITY.md](./SECURITY.md) for the complete security architecture and threat model:
 
-- **Server-Side API Key Only:** `GEMINI_API_KEY` is read strictly via `process.env.GEMINI_API_KEY` inside `src/server/apiHandlers.ts` (never bundled into `dist/`, verified via `grep -rn 'GEMINI_API_KEY' dist`). `GET /api/health` returns `{ ok, keyConfigured, model, runtime, time }` without exposing any part of the key.
+- **Server-Side API Key Only:** `GEMINI_API_KEY` is read strictly via `process.env.GEMINI_API_KEY` inside `src/server/apiHandlers.ts` (never bundled into `dist/`, verified via `grep -rn 'GEMINI_API_KEY' dist`). `GET /api/health` returns `{ ok, keyConfigured, model, fallbackModels, runtime, time }`, and optional rate-limited `GET /api/health?probe=1` performs one tiny live Gemini check returning `{ ok, modelTried, status, category }` without exposing any key fragments or raw upstream bodies.
 - **Input & Payload Hardening:** POST endpoints enforce `Content-Type: application/json` (`415`), strict `32 KB` body caps (`413`), safe string/Buffer/object/stream `req.body` parsing, Zod runtime validation (`src/utils/validation.ts`), `500`-char text caps, and lat/lon bounds checks.
 - **Prompt-Injection & XSS Guard:** User data is isolated inside `<<<USER_DATA_START>>>` / `<<<USER_DATA_END>>>` delimiters (`src/utils/promptBuilder.ts`); `@google/genai` blocks `BLOCK_MEDIUM_AND_ABOVE`; chat markdown renders via `react-markdown` with raw HTML disabled (`allowedElements: ['p', 'ul', 'ol', 'li', 'strong', 'em', 'code']`, `unwrapDisallowed`).
 - **Headers & Rate Limiting:** `vercel.json`, `server.ts`, and `index.html` apply `Content-Security-Policy`, `Cross-Origin-Opener-Policy: same-origin`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `X-Frame-Options: DENY`. Sliding-window rate limiters (`10/min` client, `20/min` per-IP server with bounded map) and `AbortController` timeouts (`15s` geo/AQI, `45s` server AI within `maxDuration: 60`) guard every route.
@@ -100,13 +100,13 @@ See [SECURITY.md](./SECURITY.md) for the complete security architecture and thre
 
 ### 4. Testing
 
-- **Comprehensive Vitest Suite (`10` files, `66` passing tests):** Covers AQI math, Zod validation, cache/rate-limiting, diminishing-returns calculator & duplicated-prefix regression checks, 100% EN/HI translation key parity, error classification (`classifyUpstreamError` / `getLocalizedApiErrorMessage`), hooks, service deduplication & JSON repair, Vercel serverless request edge cases (`string`/`Buffer`/`object`/stream `req.body`, retries, model fallback, SSE-to-JSON fallback), XSS neutralization, and `jest-axe` accessibility audits.
+- **Comprehensive Vitest Suite (`10` files, `67` passing tests):** Covers AQI math, Zod validation, cache/rate-limiting, diminishing-returns calculator & duplicated-prefix regression checks, 100% EN/HI translation key parity, error classification (`classifyUpstreamError` / `getLocalizedApiErrorMessage`), hooks, service deduplication & JSON repair, Vercel serverless request edge cases (`string`/`Buffer`/`object`/stream `req.body`, retries, ordered 3-model fallback on 404/403/permission errors, `GET /api/health?probe=1` rate-limited checks, SSE-to-JSON fallback), XSS neutralization, and `jest-axe` accessibility audits.
 - **Measured V8 Coverage (`npm run test:coverage`):**
-  - **All measured files (`api/`, `src/server/`, `src/utils/`, `src/services/`, `src/hooks/`):** **`92.72%` Statements | `81.50%` Branches | `96.51%` Functions | `92.82%` Lines**
+  - **All measured files (`api/`, `src/server/`, `src/utils/`, `src/services/`, `src/hooks/`):** **`92.71%` Statements | `81.15%` Branches | `96.04%` Functions | `92.80%` Lines**
   - `api/`: **`100%`** Statements / Branches / Functions / Lines
-  - `src/utils/`: **`98.82%`** Statements | **`98.80%`** Lines (`100%` on `aqi.ts`, `fallbackPlan.ts`, `impactCalculator.ts`, `network.ts`, `promptBuilder.ts`, `rateLimiter.ts`, `storage.ts`)
-  - `src/server/`: **`93.07%`** Statements | **`100%`** Functions | **`93.04%`** Lines
-  - `src/services/`: **`90.90%`** Statements (`95.55%` on `airQuality.ts`)
+  - `src/utils/`: **`98.85%`** Statements | **`98.83%`** Lines (`100%` on `aqi.ts`, `fallbackPlan.ts`, `impactCalculator.ts`, `network.ts`, `promptBuilder.ts`, `rateLimiter.ts`, `storage.ts`)
+  - `src/server/`: **`93.11%`** Statements | **`97.61%`** Functions | **`93.08%`** Lines
+  - `src/services/`: **`90.57%`** Statements (`95.55%` on `airQuality.ts`)
   - `src/hooks/`: **`87.19%`** Statements (`100%` on `useDebounce.ts`, `94.59%` on `usePlanGenerator.ts`)
 
 ### 5. Accessibility
@@ -152,9 +152,11 @@ See [SECURITY.md](./SECURITY.md) for the complete security architecture and thre
                                                          v
                                         +---------------------------------+
                                         | Google Gemini API (@google/genai)|
-                                        |  - GEMINI_MODEL (default:       |
-                                        |    gemini-2.5-flash)            |
-                                        |  - fallback: gemini-2.5-flash-lite
+                                        |  - GEMINI_MODEL (if set, first) |
+                                        |  - fallback list:               |
+                                        |    1. gemini-3.8-flash          |
+                                        |    2. gemini-3.5-flash-lite     |
+                                        |    3. gemini-3.6-flash          |
                                         +---------------------------------+
 ```
 
@@ -223,13 +225,13 @@ Configure variables inside `.env`:
 
 ```env
 GEMINI_API_KEY="your-gemini-api-key"
-GEMINI_MODEL="gemini-2.5-flash"
-GEMINI_FALLBACK_MODEL="gemini-2.5-flash-lite"
+GEMINI_MODEL="gemini-3.8-flash"
+GEMINI_FALLBACK_MODEL="gemini-3.5-flash-lite"
 APP_URL="http://localhost:3000"
 ```
 
 - `GEMINI_API_KEY`: Read exclusively on the server via `process.env.GEMINI_API_KEY` inside `src/server/apiHandlers.ts`.
-- `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL`: Optional overrides if you want a different Gemini model without code changes.
+- `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL`: Optional overrides; when `GEMINI_MODEL` is set, it runs first ahead of the ordered default fallback list (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`).
 - **Important:** Never commit `.env` to version control (it is excluded by `.gitignore`), and **never** prefix `GEMINI_API_KEY` with `VITE_`—client-prefixed variables are bundled into browser JavaScript.
 
 ### Run Locally
@@ -271,7 +273,7 @@ SafeAir Saathi is preconfigured for Vercel via `vercel.json` (`framework: "vite"
    - **Output Directory:** `dist`
 3. Add server-side environment variables under **Project Settings → Environment Variables**:
    - **Name:** `GEMINI_API_KEY` → **Value:** Your Google Gemini API key
-   - _(Optional)_ **Name:** `GEMINI_MODEL` → **Value:** `gemini-2.5-flash`
+   - _(Optional)_ **Name:** `GEMINI_MODEL` → **Value:** `gemini-3.8-flash`
    - **Environments:** Production, Preview, and Development
 4. Click **Deploy**.
 
@@ -291,12 +293,13 @@ vercel --prod
 
 If `/api/plan` or `/api/chat` falls back to rule-based guidance on Vercel:
 
-1. **Check `/api/health` first:**
+1. **Check `/api/health` and `/api/health?probe=1` first:**
    Open `https://<your-vercel-domain>/api/health` in your browser or run:
    ```bash
    curl https://safe-air-lilac.vercel.app/api/health
+   curl "https://safe-air-lilac.vercel.app/api/health?probe=1"
    ```
-   Verify that `"ok": true` and `"keyConfigured": true`. It will never expose your API key.
+   `/api/health` confirms `"ok": true` and `"keyConfigured": true`. The rate-limited `?probe=1` mode makes one tiny live Gemini call and returns `{ ok, modelTried, status, category }` (`missing_key`, `invalid_key`, `quota_exceeded`, `model_unavailable`, `timeout`, or `upstream_error`) without exposing keys or raw upstream bodies.
 2. **Verify `GEMINI_API_KEY` in Vercel Project Settings:**
    Go to **Vercel Dashboard → Project → Settings → Environment Variables**. Ensure `GEMINI_API_KEY` is spelled exact (`GEMINI_API_KEY`, not `VITE_GEMINI_API_KEY`) and enabled for **Production** (and Preview if testing preview URLs). Ensure the key from Google AI Studio is active with Generative Language API enabled.
 3. **Redeploy After Any Environment Variable Change:**
@@ -310,7 +313,7 @@ If `/api/plan` or `/api/chat` falls back to rule-based guidance on Vercel:
 
 | Command                 | Purpose                                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `npm test`              | Run all 66 Vitest unit, service, server handler, component, and `jest-axe` accessibility tests                |
+| `npm test`              | Run all 67 Vitest unit, service, server handler, component, and `jest-axe` accessibility tests                |
 | `npm run test:coverage` | Run the full suite and generate V8 coverage for `api`, `src/server`, `src/utils`, `src/services`, `src/hooks` |
 | `npm run lint`          | Run ESLint (`typescript-eslint`, `react-hooks`, `jsx-a11y`) + `tsc --noEmit`                                  |
 | `npm run typecheck`     | Run strict TypeScript checking across `src/`, `api/`, `tests/`, and `server.ts`                               |

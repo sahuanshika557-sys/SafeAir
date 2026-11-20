@@ -11,8 +11,10 @@ import { z } from 'zod';
 import {
   API_TIMEOUT_MS,
   AQI_CACHE_TTL_MS,
-  GEMINI_FALLBACK_MODEL,
+  GEMINI_FALLBACK_MODELS,
   GEMINI_MODEL,
+  HEALTH_PROBE_RATE_LIMIT_MAX,
+  HEALTH_PROBE_TIMEOUT_MS,
   MAX_CHAT_HISTORY_MESSAGES,
   MAX_FREE_TEXT_LENGTH,
   RATE_LIMIT_MAX_REQUESTS,
@@ -26,6 +28,7 @@ import {
   classifyUpstreamError,
   extractSafeErrorDiagnostics,
   getLocalizedApiErrorMessage,
+  isDefinitiveKeyFailure,
 } from '../utils/errorDiagnostics.js';
 import {
   buildOpenMeteoAqiUrl,
@@ -66,6 +69,7 @@ const MAX_TRACKED_IPS = 500;
 const BASE_RETRY_DELAY_MS = 250;
 
 const rateLimitersByIp = new Map<string, SlidingWindowRateLimiter>();
+const probeRateLimitersByIp = new Map<string, SlidingWindowRateLimiter>();
 const geocodeCache = new TtlCache<unknown>(AQI_CACHE_TTL_MS, 100);
 const aqiCache = new TtlCache<unknown>(AQI_CACHE_TTL_MS, 100);
 const reverseGeocodeCache = new TtlCache<{
@@ -124,6 +128,7 @@ export function resetServerCaches(): void {
  */
 export function resetServerRateLimiter(): void {
   rateLimitersByIp.clear();
+  probeRateLimitersByIp.clear();
 }
 
 /**
@@ -136,11 +141,18 @@ export function getPrimaryGeminiModel(): string {
 
 /**
  * Returns ordered unique Gemini model candidates for primary execution and automatic fallback.
+ * When `GEMINI_MODEL` is set, it runs first, followed by the ordered fallback list.
  */
 export function getGeminiModelCandidates(): string[] {
-  const primary = getPrimaryGeminiModel();
-  const secondary = process.env.GEMINI_FALLBACK_MODEL?.trim() || GEMINI_FALLBACK_MODEL;
-  return Array.from(new Set([primary, secondary, GEMINI_MODEL, GEMINI_FALLBACK_MODEL]));
+  const primary = process.env.GEMINI_MODEL?.trim();
+  const extraFallback = process.env.GEMINI_FALLBACK_MODEL?.trim();
+  return Array.from(
+    new Set(
+      [primary, extraFallback, ...GEMINI_FALLBACK_MODELS].filter((value): value is string =>
+        Boolean(value && value.trim()),
+      ),
+    ),
+  );
 }
 
 function hasConfiguredGeminiKey(): boolean {
@@ -160,20 +172,32 @@ function getClientIp(req: ServerApiRequest): string {
   return typeof remoteAddr === 'string' && remoteAddr.trim() ? remoteAddr.slice(0, 80) : 'local';
 }
 
-function consumePerIpRateLimit(req: ServerApiRequest) {
+function consumeRateLimitFromMap(
+  map: Map<string, SlidingWindowRateLimiter>,
+  req: ServerApiRequest,
+  maxRequests: number,
+) {
   const ip = getClientIp(req);
-  let limiter = rateLimitersByIp.get(ip);
+  let limiter = map.get(ip);
   if (!limiter) {
-    if (rateLimitersByIp.size >= MAX_TRACKED_IPS) {
-      const oldestIp = rateLimitersByIp.keys().next().value;
+    if (map.size >= MAX_TRACKED_IPS) {
+      const oldestIp = map.keys().next().value;
       if (oldestIp !== undefined) {
-        rateLimitersByIp.delete(oldestIp);
+        map.delete(oldestIp);
       }
     }
-    limiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX_REQUESTS * 2, RATE_LIMIT_WINDOW_MS);
-    rateLimitersByIp.set(ip, limiter);
+    limiter = new SlidingWindowRateLimiter(maxRequests, RATE_LIMIT_WINDOW_MS);
+    map.set(ip, limiter);
   }
   return limiter.consume();
+}
+
+function consumePerIpRateLimit(req: ServerApiRequest) {
+  return consumeRateLimitFromMap(rateLimitersByIp, req, RATE_LIMIT_MAX_REQUESTS * 2);
+}
+
+function consumeProbeRateLimit(req: ServerApiRequest) {
+  return consumeRateLimitFromMap(probeRateLimitersByIp, req, HEALTH_PROBE_RATE_LIMIT_MAX);
 }
 
 const recommendationItemGeminiSchema: Schema = {
@@ -571,10 +595,10 @@ async function openValidatedStreamWithRetry(
           status: httpStatus,
         });
 
-        if (category === 'invalid_key' || category === 'bad_request') {
+        if (category === 'bad_request' || isDefinitiveKeyFailure(err)) {
           throw err;
         }
-        if (category === 'model_unavailable') {
+        if (category === 'model_unavailable' || category === 'invalid_key') {
           break;
         }
         if (retryable && attempt < 2) {
@@ -636,10 +660,10 @@ async function generateNonStreamingWithRetry(
           status: httpStatus,
         });
 
-        if (category === 'invalid_key' || category === 'bad_request') {
+        if (category === 'bad_request' || isDefinitiveKeyFailure(err)) {
           throw err;
         }
-        if (category === 'model_unavailable') {
+        if (category === 'model_unavailable' || category === 'invalid_key') {
           break;
         }
         if (retryable && attempt < 2) {
@@ -860,8 +884,106 @@ async function proxyOpenMeteoJson(
   }
 }
 
+type HealthProbeCategory =
+  | 'missing_key'
+  | 'invalid_key'
+  | 'quota_exceeded'
+  | 'model_unavailable'
+  | 'timeout'
+  | 'upstream_error';
+
+async function runHealthProbe(req: ServerApiRequest, res: ServerApiResponse): Promise<void> {
+  const modelTried = getPrimaryGeminiModel();
+  const rate = consumeProbeRateLimit(req);
+  if (!rate.allowed) {
+    sendJson(
+      res,
+      429,
+      {
+        ok: false,
+        modelTried,
+        status: 429,
+        category: 'quota_exceeded' satisfies HealthProbeCategory,
+      },
+      'no-store',
+    );
+    return;
+  }
+
+  const ai = createGeminiClient();
+  if (!ai) {
+    sendJson(
+      res,
+      503,
+      {
+        ok: false,
+        modelTried,
+        status: 503,
+        category: 'missing_key' satisfies HealthProbeCategory,
+      },
+      'no-store',
+    );
+    return;
+  }
+
+  const probeTimeout = aiTestOverrides?.totalTimeoutMs ?? HEALTH_PROBE_TIMEOUT_MS;
+  const { controller, cleanup } = createLinkedTimeoutController(probeTimeout);
+  try {
+    const isGemini3Or4 = /^gemini-[34]/i.test(modelTried);
+    await ai.models.generateContent({
+      model: modelTried,
+      contents: 'Reply with OK.',
+      config: {
+        abortSignal: controller.signal,
+        ...(isGemini3Or4
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : { maxOutputTokens: 16 }),
+      },
+    });
+    sendJson(
+      res,
+      200,
+      {
+        ok: true,
+        modelTried,
+        status: 200,
+        category: null,
+      },
+      'no-store',
+    );
+  } catch (err: unknown) {
+    const { category, httpStatus } = classifyUpstreamError(err);
+    const diag = extractSafeErrorDiagnostics(err);
+    const probeCategory: HealthProbeCategory =
+      category === 'bad_request' ? 'upstream_error' : category;
+    const reportedStatus =
+      typeof diag.status === 'number' && diag.status >= 100 && diag.status < 600
+        ? diag.status
+        : httpStatus;
+    console.error('[SafeAir Saathi] /api/health probe failed:', {
+      model: modelTried,
+      category: probeCategory,
+      status: reportedStatus,
+    });
+    sendJson(
+      res,
+      httpStatus,
+      {
+        ok: false,
+        modelTried,
+        status: reportedStatus,
+        category: probeCategory,
+      },
+      'no-store',
+    );
+  } finally {
+    cleanup();
+  }
+}
+
 /**
- * Shared handler for `GET /api/health` exposing configuration and runtime readiness without secrets.
+ * Shared handler for `GET /api/health` exposing configuration readiness and optional
+ * rate-limited `?probe=1` live Gemini connectivity diagnostics without leaking secrets.
  *
  * @param req - Incoming HTTP request.
  * @param res - Outgoing HTTP JSON response.
@@ -874,6 +996,13 @@ export async function handleHealthRequest(
     if (!enforceHttpMethod(req, res, 'GET')) {
       return;
     }
+
+    const probeParam = getQueryParam(req, 'probe').trim().toLowerCase();
+    if (probeParam === '1' || probeParam === 'true') {
+      await runHealthProbe(req, res);
+      return;
+    }
+
     sendJson(
       res,
       200,
@@ -881,6 +1010,7 @@ export async function handleHealthRequest(
         ok: true,
         keyConfigured: hasConfiguredGeminiKey(),
         model: getPrimaryGeminiModel(),
+        fallbackModels: getGeminiModelCandidates(),
         runtime: 'nodejs',
         time: new Date().toISOString(),
       },

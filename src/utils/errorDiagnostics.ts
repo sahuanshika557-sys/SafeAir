@@ -73,11 +73,11 @@ function determineCategory(
   }
   if (
     status === 401 ||
-    status === 403 ||
     lowerMsg.includes('api_key_invalid') ||
     lowerMsg.includes('api key not valid') ||
-    lowerMsg.includes('permission_denied') ||
     lowerMsg.includes('invalid api key') ||
+    lowerMsg.includes('api key expired') ||
+    lowerMsg.includes('unauthenticated') ||
     lowerMsg.includes('unauthorized')
   ) {
     return 'invalid_key';
@@ -97,14 +97,53 @@ function determineCategory(
     lowerMsg.includes('model_not_found') ||
     lowerMsg.includes('not found') ||
     lowerMsg.includes('unavailable') ||
-    lowerMsg.includes('overloaded')
+    lowerMsg.includes('overloaded') ||
+    (lowerMsg.includes('model') &&
+      (lowerMsg.includes('permission') ||
+        lowerMsg.includes('access') ||
+        lowerMsg.includes('allowed') ||
+        lowerMsg.includes('enabled') ||
+        lowerMsg.includes('supported')))
   ) {
     return 'model_unavailable';
+  }
+  if (
+    status === 403 ||
+    lowerMsg.includes('permission_denied') ||
+    lowerMsg.includes('permission') ||
+    lowerMsg.includes('access denied') ||
+    lowerMsg.includes('forbidden')
+  ) {
+    return 'invalid_key';
   }
   if (status === 400 || lowerMsg.includes('invalid_argument') || lowerMsg.includes('bad request')) {
     return 'bad_request';
   }
   return 'upstream_error';
+}
+
+/**
+ * Determines whether an `invalid_key` error is a definitive API key/authentication rejection
+ * (affecting every model) rather than a model-scoped permission/access error.
+ *
+ * @param err - Caught unknown error value.
+ * @returns `true` if retrying backup models cannot succeed due to invalid/expired credentials.
+ */
+export function isDefinitiveKeyFailure(err: unknown): boolean {
+  const diag = extractSafeErrorDiagnostics(err);
+  if (diag.category !== 'invalid_key') {
+    return false;
+  }
+  const lowerMsg = diag.message.toLowerCase();
+  return (
+    diag.status === 401 ||
+    lowerMsg.includes('api_key_invalid') ||
+    lowerMsg.includes('api key not valid') ||
+    lowerMsg.includes('invalid api key') ||
+    lowerMsg.includes('api key expired') ||
+    lowerMsg.includes('unauthenticated') ||
+    lowerMsg.includes('unauthorized')
+  );
 }
 
 /**
@@ -136,6 +175,7 @@ export function extractSafeErrorDiagnostics(err: unknown): SafeErrorDiagnostics 
 
 /**
  * Maps an {@link ApiErrorCategory} to a friendly, localized user-facing message
+ * distinguishing invalid credentials, quota limits, and unavailable models
  * without exposing raw HTTP status codes or internal diagnostics.
  *
  * @param category - Classified error category.
@@ -157,11 +197,11 @@ export function getLocalizedApiErrorMessage(
       case 'missing_key':
         return `सर्वर पर एआई सेवा कॉन्फ़िगर नहीं है।${suffixHi}`;
       case 'invalid_key':
-        return `एआई सेवा की कुंजी अमान्य है या अनुमति नहीं है। कृपया सर्वर कॉन्फ़िगरेशन जांचें।${suffixHi}`;
+        return `एआई सेवा की एपीआई कुंजी अमान्य है या अस्वीकृत कर दी गई है। कृपया सर्वर कुंजी कॉन्फ़िगरेशन जांचें।${suffixHi}`;
       case 'quota_exceeded':
-        return `एआई सेवा अभी व्यस्त है या सीमा पूरी हो गई है। कृपया एक मिनट में पुनः प्रयास करें।${suffixHi}`;
+        return `एआई सेवा की उपयोग सीमा (कोटा) अभी समाप्त हो गई है। कृपया एक मिनट में पुनः प्रयास करें।${suffixHi}`;
       case 'model_unavailable':
-        return `चयनित एआई मॉडल अभी उपलब्ध नहीं है। कृपया कुछ क्षण बाद पुनः प्रयास करें।${suffixHi}`;
+        return `कॉन्फ़िगर किया गया एआई मॉडल अभी उपलब्ध या सुलभ नहीं है। कृपया कुछ क्षण बाद पुनः प्रयास करें।${suffixHi}`;
       case 'timeout':
         return `एआई सेवा से उत्तर मिलने में बहुत समय लगा। कृपया पुनः प्रयास करें।${suffixHi}`;
       case 'bad_request':
@@ -176,11 +216,11 @@ export function getLocalizedApiErrorMessage(
     case 'missing_key':
       return `The AI service is not configured on the server.${suffixEn}`;
     case 'invalid_key':
-      return `The server AI key appears invalid or lacks permission.${suffixEn}`;
+      return `The server AI API key is invalid or rejected. Please verify the API key configuration.${suffixEn}`;
     case 'quota_exceeded':
-      return `The AI service is busy right now. Please retry in a minute.${suffixEn}`;
+      return `The AI quota or rate limit has been reached. Please retry in a minute.${suffixEn}`;
     case 'model_unavailable':
-      return `The AI model is temporarily unavailable. Please retry shortly.${suffixEn}`;
+      return `The AI model is unavailable or not accessible for this key. Please retry shortly.${suffixEn}`;
     case 'timeout':
       return `The AI service took too long to respond. Please retry.${suffixEn}`;
     case 'bad_request':

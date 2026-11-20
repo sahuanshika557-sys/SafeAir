@@ -258,7 +258,7 @@ describe('Custom hooks', () => {
       });
     });
 
-    expect(result.current.error).toContain('temporarily unavailable');
+    expect(result.current.error).toContain('unavailable or not accessible');
     expect(result.current.plan?.isFallback).toBe(true);
     expect(result.current.plan?.generatedForLocationId).toBe(DEFAULT_LOCATION.id);
     expect(result.current.plan?.generatedForAqi).toBe(220);
@@ -266,7 +266,7 @@ describe('Custom hooks', () => {
     await act(async () => {
       await result.current.retryLastPlan();
     });
-    expect(result.current.error).toContain('busy right now');
+    expect(result.current.error).toContain('quota or rate limit');
   });
 
   it('invokes speechSynthesis cleanly in useSpeechSynthesis', () => {
@@ -359,7 +359,7 @@ describe('Custom hooks', () => {
       }
       if (url.includes('/api/plan')) {
         return Promise.resolve(
-          new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-2.5-flash' }), {
+          new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-3.8-flash' }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
           }),

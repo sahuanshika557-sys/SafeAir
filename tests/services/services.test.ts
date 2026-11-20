@@ -21,7 +21,7 @@ function createSseResponse(chunks: string[]): Response {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
       }
       controller.enqueue(
-        encoder.encode(`data: ${JSON.stringify({ done: true, model: 'gemini-2.5-flash' })}\n\n`),
+        encoder.encode(`data: ${JSON.stringify({ done: true, model: 'gemini-3.8-flash' })}\n\n`),
       );
       controller.close();
     },
@@ -298,7 +298,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
     expect(progressCallsA.length).toBeGreaterThan(0);
     expect(progressCallsB.length).toBeGreaterThan(0);
     expect(plan.isFallback).toBe(false);
-    expect(plan.modelUsed).toBe('gemini-2.5-flash');
+    expect(plan.modelUsed).toBe('gemini-3.8-flash');
     expect(plan.generatedForAqi).toBe(215);
     expect(plan.generatedForLocationId).toBe(DEFAULT_LOCATION.id);
     // Sanitized impact must strip duplicated leading "Approximate: "
@@ -320,7 +320,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
       new Response(
         JSON.stringify({
           text: validPlanJson,
-          model: 'gemini-2.5-flash-lite',
+          model: 'gemini-3.5-flash-lite',
           nonStreaming: true,
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -333,11 +333,11 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
       language: 'en',
       bypassCache: true,
     });
-    expect(nonStreamPlan.modelUsed).toBe('gemini-2.5-flash-lite');
+    expect(nonStreamPlan.modelUsed).toBe('gemini-3.5-flash-lite');
 
     // Malformed SSE JSON triggers single repair request and succeeds when repair returns valid JSON
     fetchMock.mockResolvedValueOnce(createSseResponse(['{broken json'])).mockResolvedValueOnce(
-      new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-2.5-flash' }), {
+      new Response(JSON.stringify({ text: validPlanJson, model: 'gemini-3.8-flash' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -391,7 +391,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
         language: 'hi',
         bypassCache: true,
       }),
-    ).rejects.toThrow(/एआई सेवा की कुंजी अमान्य/);
+    ).rejects.toThrow(/एआई सेवा की एपीआई कुंजी अमान्य/);
 
     // SSE error event with errorType logs diagnostic type without leaking secrets
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -424,7 +424,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
         language: 'en',
         bypassCache: true,
       }),
-    ).rejects.toThrow(/AI model is temporarily unavailable/i);
+    ).rejects.toThrow(/AI model is unavailable or not accessible/i);
     expect(warnSpy).toHaveBeenCalledWith('[SafeAir Saathi] AI stream failed:', {
       errorType: 'ApiError',
     });
@@ -478,7 +478,7 @@ describe('Service layer (Open-Meteo + Reverse Geocode + Gemini SSE/JSON)', () =>
         language: 'en',
         onToken: () => undefined,
       }),
-    ).rejects.toThrow(/busy right now/i);
+    ).rejects.toThrow(/quota or rate limit/i);
   });
 
   it('enforces client-side 10 req/min rate limit across plan and chat requests', async () => {

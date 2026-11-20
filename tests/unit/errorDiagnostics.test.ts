@@ -4,11 +4,12 @@ import {
   classifyUpstreamError,
   extractSafeErrorDiagnostics,
   getLocalizedApiErrorMessage,
+  isDefinitiveKeyFailure,
 } from '../../src/utils/errorDiagnostics.js';
 
 describe('extractSafeErrorDiagnostics & error classification', () => {
   it('extracts errorType, numeric status, and message safely', () => {
-    const err = Object.assign(new Error('Model gemini-2.5-flash returned HTTP 404'), {
+    const err = Object.assign(new Error('Model gemini-3.8-flash returned HTTP 404'), {
       name: 'ApiError',
       status: 404,
     });
@@ -42,13 +43,28 @@ describe('extractSafeErrorDiagnostics & error classification', () => {
   });
 
   it('classifies upstream errors into stable categories, HTTP codes, and retryable flags', () => {
-    expect(
-      classifyUpstreamError(Object.assign(new Error('API_KEY_INVALID'), { status: 403 })),
-    ).toEqual({
+    const apiKeyErr = Object.assign(new Error('API_KEY_INVALID'), { status: 403 });
+    expect(classifyUpstreamError(apiKeyErr)).toEqual({
       category: 'invalid_key',
       httpStatus: 502,
       retryable: false,
     });
+    expect(isDefinitiveKeyFailure(apiKeyErr)).toBe(true);
+
+    const modelAccessErr = Object.assign(
+      new Error('PERMISSION_DENIED: Caller does not have access to model gemini-3.8-flash'),
+      { status: 403 },
+    );
+    expect(classifyUpstreamError(modelAccessErr)).toEqual({
+      category: 'model_unavailable',
+      httpStatus: 503,
+      retryable: true,
+    });
+    expect(isDefinitiveKeyFailure(modelAccessErr)).toBe(false);
+
+    const genericPermErr = Object.assign(new Error('PERMISSION_DENIED'), { status: 403 });
+    expect(classifyUpstreamError(genericPermErr).category).toBe('invalid_key');
+    expect(isDefinitiveKeyFailure(genericPermErr)).toBe(false);
 
     expect(
       classifyUpstreamError(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 })),
@@ -87,7 +103,7 @@ describe('extractSafeErrorDiagnostics & error classification', () => {
     });
   });
 
-  it('produces friendly EN and HI messages for every category without raw HTTP codes', () => {
+  it('produces friendly, distinct EN and HI messages for invalid_key, quota_exceeded, and model_unavailable without raw HTTP codes', () => {
     const categories: ApiErrorCategory[] = [
       'missing_key',
       'invalid_key',
@@ -114,5 +130,21 @@ describe('extractSafeErrorDiagnostics & error classification', () => {
         expect(msg).not.toContain('500');
       }
     }
+
+    const keyEn = getLocalizedApiErrorMessage('invalid_key', 'en', 'chat');
+    const quotaEn = getLocalizedApiErrorMessage('quota_exceeded', 'en', 'chat');
+    const modelEn = getLocalizedApiErrorMessage('model_unavailable', 'en', 'chat');
+    expect(new Set([keyEn, quotaEn, modelEn]).size).toBe(3);
+    expect(keyEn.toLowerCase()).toContain('key');
+    expect(quotaEn.toLowerCase()).toContain('quota');
+    expect(modelEn.toLowerCase()).toContain('model');
+
+    const keyHi = getLocalizedApiErrorMessage('invalid_key', 'hi', 'chat');
+    const quotaHi = getLocalizedApiErrorMessage('quota_exceeded', 'hi', 'chat');
+    const modelHi = getLocalizedApiErrorMessage('model_unavailable', 'hi', 'chat');
+    expect(new Set([keyHi, quotaHi, modelHi]).size).toBe(3);
+    expect(keyHi).toContain('कुंजी');
+    expect(quotaHi).toContain('कोटा');
+    expect(modelHi).toContain('मॉडल');
   });
 });

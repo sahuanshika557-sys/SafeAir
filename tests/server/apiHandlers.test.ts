@@ -166,8 +166,12 @@ describe('Vercel serverless functions & shared server handlers', () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_MODEL;
 
-    expect(getPrimaryGeminiModel()).toBe('gemini-2.5-flash');
-    expect(getGeminiModelCandidates()).toEqual(['gemini-2.5-flash', 'gemini-2.5-flash-lite']);
+    expect(getPrimaryGeminiModel()).toBe('gemini-3.8-flash');
+    expect(getGeminiModelCandidates()).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+    ]);
 
     const unconfiguredReq = createMockRequest({ method: 'GET', url: '/api/health' });
     const unconfiguredRes = createMockResponse();
@@ -178,11 +182,22 @@ describe('Vercel serverless functions & shared server handlers', () => {
     const healthUnconf = JSON.parse(unconfiguredRes.getBody());
     expect(healthUnconf.ok).toBe(true);
     expect(healthUnconf.keyConfigured).toBe(false);
-    expect(healthUnconf.model).toBe('gemini-2.5-flash');
+    expect(healthUnconf.model).toBe('gemini-3.8-flash');
+    expect(healthUnconf.fallbackModels).toEqual([
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+    ]);
     expect(healthUnconf.runtime).toBe('nodejs');
 
     process.env.GEMINI_API_KEY = 'AIzaSyTestSecretKeyValue123456';
-    process.env.GEMINI_MODEL = 'gemini-2.5-pro';
+    process.env.GEMINI_MODEL = 'gemini-4-hydrogen';
+    expect(getGeminiModelCandidates()).toEqual([
+      'gemini-4-hydrogen',
+      'gemini-3.8-flash',
+      'gemini-3.5-flash-lite',
+      'gemini-3.6-flash',
+    ]);
     const configuredReq = createMockRequest({ method: 'GET', url: '/api/health' });
     const configuredRes = createMockResponse();
     await healthHandler(configuredReq, configuredRes.res);
@@ -190,7 +205,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(configuredRes.getBody()).not.toContain('AIzaSy');
     const healthConf = JSON.parse(configuredRes.getBody());
     expect(healthConf.keyConfigured).toBe(true);
-    expect(healthConf.model).toBe('gemini-2.5-pro');
+    expect(healthConf.model).toBe('gemini-4-hydrogen');
 
     const postHealth = createMockRequest({ method: 'POST', url: '/api/health' });
     const postHealthRes = createMockResponse();
@@ -418,7 +433,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
       profile: DEFAULT_PROFILE,
     };
 
-    // 1. Primary 429 once -> retries and succeeds with SSE on gemini-2.5-flash (without sending thinkingConfig!)
+    // 1. Primary 429 once -> retries and succeeds with SSE on gemini-3.8-flash (with thinkingConfig LOW, no temperature/maxOutputTokens)
     const generateContentStream = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error('RESOURCE_EXHAUSTED'), { status: 429 }))
@@ -445,15 +460,20 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(sseRes.res.statusCode).toBe(200);
     expect(sseRes.headers['content-type']).toContain('text/event-stream');
     expect(generateContentStream).toHaveBeenCalledTimes(2);
-    // Ensure Gemini 2.5 config never includes unsupported thinkingConfig
-    expect(generateContentStream.mock.calls[0][0].config).not.toHaveProperty('thinkingConfig');
+    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.8-flash');
+    expect(generateContentStream.mock.calls[0][0].config).toHaveProperty('thinkingConfig');
+    expect(generateContentStream.mock.calls[0][0].config).not.toHaveProperty('temperature');
+    expect(generateContentStream.mock.calls[0][0].config).not.toHaveProperty('maxOutputTokens');
     expect(sseRes.getBody()).toContain('Morning indoor prep');
     expect(sseRes.getBody()).toContain('"done":true');
 
-    // 2. Primary model 404 -> falls back automatically to gemini-2.5-flash-lite and streams chat
+    // 2. Primary 404 + second 403 permission error -> falls back automatically to gemini-3.6-flash
     generateContentStream.mockReset();
     generateContentStream
       .mockRejectedValueOnce(Object.assign(new Error('Model not found'), { status: 404 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error('PERMISSION_DENIED: no access to model'), { status: 403 }),
+      )
       .mockResolvedValueOnce(createAsyncChunksStream(['Use fitted ', 'N95 masks.']));
 
     const chatFallbackReq = createMockRequest({
@@ -469,8 +489,9 @@ describe('Vercel serverless functions & shared server handlers', () => {
     const chatFallbackRes = createMockResponse();
     await chatHandler(chatFallbackReq, chatFallbackRes.res);
     expect(chatFallbackRes.res.statusCode).toBe(200);
-    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-2.5-flash');
-    expect(generateContentStream.mock.calls[1][0].model).toBe('gemini-2.5-flash-lite');
+    expect(generateContentStream.mock.calls[0][0].model).toBe('gemini-3.8-flash');
+    expect(generateContentStream.mock.calls[1][0].model).toBe('gemini-3.5-flash-lite');
+    expect(generateContentStream.mock.calls[2][0].model).toBe('gemini-3.6-flash');
     expect(chatFallbackRes.getBody()).toContain('N95 masks.');
 
     // 3. Invalid key (403) fails fast without retry and returns 502 { category: 'invalid_key' }
@@ -664,7 +685,7 @@ describe('Vercel serverless functions & shared server handlers', () => {
     expect(jsonChatRes.res.statusCode).toBe(200);
     expect(JSON.parse(jsonChatRes.getBody())).toEqual({
       text: 'Run HEPA purifier tonight.',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       nonStreaming: true,
     });
 
@@ -1010,5 +1031,153 @@ describe('Vercel serverless functions & shared server handlers', () => {
       realClientInitRes.res,
     );
     expect(realClientInitRes.res.statusCode).toBe(502);
+  });
+
+  it('supports GET /api/health?probe=1 with safe error categories, no secret leaks, and strict rate limiting', async () => {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_MODEL;
+
+    // 1. Missing key
+    const missingKeyProbeRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      missingKeyProbeRes.res,
+    );
+    expect(missingKeyProbeRes.res.statusCode).toBe(503);
+    expect(JSON.parse(missingKeyProbeRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 503,
+      category: 'missing_key',
+    });
+
+    // 2. Successful probe
+    const generateContent = vi.fn().mockResolvedValueOnce({ text: 'OK' });
+    setServerAiTestOverrides({
+      aiClient: { models: { generateContent } as never },
+      totalTimeoutMs: 500,
+    });
+    const okProbeRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      okProbeRes.res,
+    );
+    expect(okProbeRes.res.statusCode).toBe(200);
+    expect(okProbeRes.headers['cache-control']).toBe('no-store');
+    expect(JSON.parse(okProbeRes.getBody())).toEqual({
+      ok: true,
+      modelTried: 'gemini-3.8-flash',
+      status: 200,
+      category: null,
+    });
+
+    // 3. Model unavailable (404) & raw body never leaked
+    generateContent.mockRejectedValueOnce(
+      Object.assign(new Error('Raw secret AIzaSyLeak123456 not found for model'), { status: 404 }),
+    );
+    const unavailableRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      unavailableRes.res,
+    );
+    expect(unavailableRes.res.statusCode).toBe(503);
+    expect(unavailableRes.getBody()).not.toContain('AIzaSyLeak');
+    expect(unavailableRes.getBody()).not.toContain('Raw secret');
+    expect(JSON.parse(unavailableRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 404,
+      category: 'model_unavailable',
+    });
+
+    // 4. Invalid key (401)
+    generateContent.mockRejectedValueOnce(
+      Object.assign(new Error('API_KEY_INVALID'), { status: 401 }),
+    );
+    const badKeyRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      badKeyRes.res,
+    );
+    expect(badKeyRes.res.statusCode).toBe(502);
+    expect(JSON.parse(badKeyRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 401,
+      category: 'invalid_key',
+    });
+
+    // 5. Timeout (AbortError) -> consumes 5th allowed slot for this IP
+    generateContent.mockRejectedValueOnce(new DOMException('Timed out', 'AbortError'));
+    const timeoutRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      timeoutRes.res,
+    );
+    expect(timeoutRes.res.statusCode).toBe(504);
+    expect(JSON.parse(timeoutRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 504,
+      category: 'timeout',
+    });
+
+    // 6. 6th probe from same IP hits rate limit (429 quota_exceeded) without invoking Gemini
+    const rateLimitedRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+      }),
+      rateLimitedRes.res,
+    );
+    expect(rateLimitedRes.res.statusCode).toBe(429);
+    expect(JSON.parse(rateLimitedRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 429,
+      category: 'quota_exceeded',
+    });
+    expect(generateContent).toHaveBeenCalledTimes(4);
+
+    // 7. Distinct IP can probe upstream_error cleanly
+    generateContent.mockRejectedValueOnce(new Error('ECONNRESET upstream error'));
+    const upstreamRes = createMockResponse();
+    await healthHandler(
+      createMockRequest({
+        method: 'GET',
+        url: '/api/health?probe=1',
+        headers: { 'x-forwarded-for': '203.0.113.50' },
+      }),
+      upstreamRes.res,
+    );
+    expect(upstreamRes.res.statusCode).toBe(502);
+    expect(JSON.parse(upstreamRes.getBody())).toEqual({
+      ok: false,
+      modelTried: 'gemini-3.8-flash',
+      status: 502,
+      category: 'upstream_error',
+    });
   });
 });
