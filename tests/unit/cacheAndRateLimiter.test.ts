@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
-import { buildAqiCacheKey, buildPlanCacheKey, TtlCache } from '../../src/utils/cache.ts';
-import { SlidingWindowRateLimiter } from '../../src/utils/rateLimiter.ts';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.js';
+import { buildAqiCacheKey, buildPlanCacheKey, TtlCache } from '../../src/utils/cache.js';
+import { SlidingWindowRateLimiter } from '../../src/utils/rateLimiter.js';
 
 describe('TtlCache and cache keys', () => {
   it('stores, retrieves, and expires entries after TTL', () => {

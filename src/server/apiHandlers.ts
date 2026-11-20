@@ -19,34 +19,34 @@ import {
   RATE_LIMIT_WINDOW_MS,
   REVERSE_GEOCODE_CACHE_TTL_MS,
   SERVER_GEMINI_TOTAL_TIMEOUT_MS,
-} from '../constants/index.ts';
-import type { ApiErrorCategory, Language } from '../types/index.ts';
-import { TtlCache, buildAqiCacheKey } from '../utils/cache.ts';
+} from '../constants/index.js';
+import type { ApiErrorCategory, Language } from '../types/index.js';
+import { TtlCache, buildAqiCacheKey } from '../utils/cache.js';
 import {
   classifyUpstreamError,
   extractSafeErrorDiagnostics,
   getLocalizedApiErrorMessage,
-} from '../utils/errorDiagnostics.ts';
+} from '../utils/errorDiagnostics.js';
 import {
   buildOpenMeteoAqiUrl,
   buildOpenMeteoGeocodingUrl,
   buildReverseGeocodingUrl,
   createLinkedTimeoutController,
-} from '../utils/network.ts';
+} from '../utils/network.js';
 import {
   buildChatSystemInstruction,
   buildChatUserPrompt,
   buildPlanRepairUserPrompt,
   buildPlanSystemInstruction,
   buildPlanUserPrompt,
-} from '../utils/promptBuilder.ts';
-import { SlidingWindowRateLimiter } from '../utils/rateLimiter.ts';
+} from '../utils/promptBuilder.js';
+import { SlidingWindowRateLimiter } from '../utils/rateLimiter.js';
 import {
   actionPlanSchema,
   lifestyleProfileSchema,
   sanitizeTextInput,
   validateCityQuery,
-} from '../utils/validation.ts';
+} from '../utils/validation.js';
 
 /**
  * Minimal Node/Express/Vercel compatible request interface for API handlers.
@@ -671,7 +671,6 @@ function tryParseValidPlanJson(rawText: string): string | null {
 }
 
 async function handleGeminiResponse(
-  req: ServerApiRequest,
   res: ServerApiResponse,
   options: {
     routeLabel: '/api/plan' | '/api/chat';
@@ -699,12 +698,12 @@ async function handleGeminiResponse(
   const totalBudget = aiTestOverrides?.totalTimeoutMs ?? SERVER_GEMINI_TOTAL_TIMEOUT_MS;
   const { controller, cleanup } = createLinkedTimeoutController(totalBudget);
 
-  const onReqClose = (): void => {
+  const onResClose = (): void => {
     if (!res.writableEnded) {
       controller.abort();
     }
   };
-  req.on?.('close', onReqClose);
+  res.on?.('close', onResClose);
 
   try {
     if (!options.preferNonStreaming) {
@@ -820,7 +819,7 @@ async function handleGeminiResponse(
       category,
     });
   } finally {
-    req.off?.('close', onReqClose);
+    res.off?.('close', onResClose);
     cleanup();
   }
 }
@@ -1139,7 +1138,7 @@ export async function handlePlanRequest(
       Boolean(repairPreviousMalformed) ||
       (typeof acceptHeader === 'string' && acceptHeader.includes('application/json'));
 
-    await handleGeminiResponse(req, res, {
+    await handleGeminiResponse(res, {
       routeLabel: '/api/plan',
       contextType: 'plan',
       language,
@@ -1231,7 +1230,7 @@ export async function handleChatRequest(
       parsed.data.stream === false ||
       (typeof acceptHeader === 'string' && acceptHeader.includes('application/json'));
 
-    await handleGeminiResponse(req, res, {
+    await handleGeminiResponse(res, {
       routeLabel: '/api/chat',
       contextType: 'chat',
       language: parsed.data.language,

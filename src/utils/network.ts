@@ -2,8 +2,8 @@ import {
   OPEN_METEO_AQI_URL,
   OPEN_METEO_GEOCODING_URL,
   REVERSE_GEOCODING_URL,
-} from '../constants/index.ts';
-import type { Language } from '../types/index.ts';
+} from '../constants/index.js';
+import type { Language } from '../types/index.js';
 
 /**
  * Linked timeout controller returned by {@link createLinkedTimeoutController}.

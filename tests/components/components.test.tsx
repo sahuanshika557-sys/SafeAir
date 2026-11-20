@@ -2,17 +2,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
-import { ActionPlanView } from '../../src/components/ActionPlanView.tsx';
-import { AqiHeroCard } from '../../src/components/AqiHeroCard.tsx';
-import { ErrorBoundary } from '../../src/components/ErrorBoundary.tsx';
-import { FollowUpChat } from '../../src/components/FollowUpChat.tsx';
-import { Header } from '../../src/components/Header.tsx';
-import { ImpactCalculator } from '../../src/components/ImpactCalculator.tsx';
-import { ProfileForm } from '../../src/components/ProfileForm.tsx';
-import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
-import { TRANSLATIONS } from '../../src/i18n/translations.ts';
-import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
-import { buildRuleBasedFallbackPlan } from '../../src/utils/fallbackPlan.ts';
+import { ActionPlanView } from '../../src/components/ActionPlanView.js';
+import { AqiHeroCard } from '../../src/components/AqiHeroCard.js';
+import { ErrorBoundary } from '../../src/components/ErrorBoundary.js';
+import { FollowUpChat } from '../../src/components/FollowUpChat.js';
+import { Header } from '../../src/components/Header.js';
+import { ImpactCalculator } from '../../src/components/ImpactCalculator.js';
+import { ProfileForm } from '../../src/components/ProfileForm.js';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.js';
+import { TRANSLATIONS } from '../../src/i18n/translations.js';
+import { createManualAirQualityReading } from '../../src/utils/aqi.js';
+import { buildRuleBasedFallbackPlan } from '../../src/utils/fallbackPlan.js';
 
 describe('SafeAir Saathi components and accessibility (jest-axe)', () => {
   it('renders Header with skip link, language toggle, and zero axe violations', async () => {

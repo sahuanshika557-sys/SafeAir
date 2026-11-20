@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { generatePersonalizedPlan } from '../services/gemini.ts';
+import { generatePersonalizedPlan } from '../services/gemini.js';
 import type {
   ActionPlan,
   AirQualityReading,
   Language,
   LifestyleProfile,
   LocationData,
-} from '../types/index.ts';
-import { buildRuleBasedFallbackPlan } from '../utils/fallbackPlan.ts';
-import { isAbortError } from '../utils/network.ts';
+} from '../types/index.js';
+import { buildRuleBasedFallbackPlan } from '../utils/fallbackPlan.js';
+import { isAbortError } from '../utils/network.js';
 
 /**
  * State and actions returned by {@link usePlanGenerator}.

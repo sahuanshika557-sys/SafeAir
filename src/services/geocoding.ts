@@ -1,13 +1,13 @@
-import { API_TIMEOUT_MS, REVERSE_GEOCODE_CACHE_TTL_MS } from '../constants/index.ts';
-import type { Language, LocationData } from '../types/index.ts';
-import { buildAqiCacheKey, TtlCache } from '../utils/cache.ts';
+import { API_TIMEOUT_MS, REVERSE_GEOCODE_CACHE_TTL_MS } from '../constants/index.js';
+import type { Language, LocationData } from '../types/index.js';
+import { buildAqiCacheKey, TtlCache } from '../utils/cache.js';
 import {
   buildOpenMeteoGeocodingUrl,
   createLinkedTimeoutController,
   fetchJsonWithProxyFallback,
   isAbortError,
-} from '../utils/network.ts';
-import { geocodingResponseSchema, validateCityQuery } from '../utils/validation.ts';
+} from '../utils/network.js';
+import { geocodingResponseSchema, validateCityQuery } from '../utils/validation.js';
 
 const reverseGeocodeCache = new TtlCache<{
   name: string;

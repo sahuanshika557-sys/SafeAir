@@ -2,14 +2,14 @@ import {
   IMPACT_CHOICES,
   IMPACT_DIMINISHING_FACTOR,
   MAX_COMBINED_PM25_REDUCTION_PERCENT,
-} from '../constants/index.ts';
+} from '../constants/index.js';
 import type {
   ActionPlan,
   ImpactChoiceId,
   ImpactEstimate,
   Language,
   RecommendationItem,
-} from '../types/index.ts';
+} from '../types/index.js';
 
 /**
  * Strips redundant leading "Approximate:", "Approx.", or Hindi "लगभग" prefixes from an

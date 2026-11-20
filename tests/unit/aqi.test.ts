@@ -5,7 +5,7 @@ import {
   formatAqiTimestamp,
   getAqiCategory,
   pm25ToUsAqi,
-} from '../../src/utils/aqi.ts';
+} from '../../src/utils/aqi.js';
 
 describe('AQI category boundaries and helpers', () => {
   it('classifies all US AQI category boundaries accurately', () => {

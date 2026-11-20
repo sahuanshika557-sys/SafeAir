@@ -1,4 +1,4 @@
-import type { ApiErrorCategory, Language } from '../types/index.ts';
+import type { ApiErrorCategory, Language } from '../types/index.js';
 
 /**
  * Structured non-secret diagnostic summary for server and service errors.

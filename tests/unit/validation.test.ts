@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PROFILE, MAX_FREE_TEXT_LENGTH } from '../../src/constants/index.ts';
+import { DEFAULT_PROFILE, MAX_FREE_TEXT_LENGTH } from '../../src/constants/index.js';
 import {
   manualAqiSchema,
   sanitizeTextInput,
   validateChatMessage,
   validateCityQuery,
   validateProfile,
-} from '../../src/utils/validation.ts';
+} from '../../src/utils/validation.js';
 
 describe('Input sanitization and Zod validation', () => {
   it('strips HTML angle brackets, control chars, and delimiter spoofing', () => {

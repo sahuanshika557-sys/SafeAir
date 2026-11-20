@@ -5,8 +5,8 @@ import {
   MAX_US_AQI,
   MIN_SEARCH_QUERY_LENGTH,
   MIN_US_AQI,
-} from '../constants/index.ts';
-import type { Language, LifestyleProfile } from '../types/index.ts';
+} from '../constants/index.js';
+import type { Language, LifestyleProfile } from '../types/index.js';
 
 /**
  * Sanitizes user free-text input by stripping HTML tags, control characters,

@@ -6,7 +6,7 @@ import {
   createLinkedTimeoutController,
   fetchJsonWithProxyFallback,
   isAbortError,
-} from '../../src/utils/network.ts';
+} from '../../src/utils/network.js';
 
 describe('Network utility helpers', () => {
   afterEach(() => {

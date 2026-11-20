@@ -4,7 +4,7 @@ import type {
   Language,
   LifestyleProfile,
   LocationData,
-} from '../types/index.ts';
+} from '../types/index.js';
 
 /**
  * Generates a deterministic, rule-based fallback action plan tailored to AQI severity,

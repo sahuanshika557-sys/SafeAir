@@ -1,12 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import aqiHandler from '../../api/aqi.ts';
-import chatHandler from '../../api/chat.ts';
-import geocodeHandler from '../../api/geocode.ts';
-import healthHandler from '../../api/health.ts';
-import planHandler from '../../api/plan.ts';
-import reverseGeocodeHandler from '../../api/reverse-geocode.ts';
-import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
+import aqiHandler from '../../api/aqi.js';
+import chatHandler from '../../api/chat.js';
+import geocodeHandler from '../../api/geocode.js';
+import healthHandler from '../../api/health.js';
+import planHandler from '../../api/plan.js';
+import reverseGeocodeHandler from '../../api/reverse-geocode.js';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.js';
 import {
   getGeminiModelCandidates,
   getPrimaryGeminiModel,
@@ -15,8 +15,8 @@ import {
   setServerAiTestOverrides,
   type ServerApiRequest,
   type ServerApiResponse,
-} from '../../src/server/apiHandlers.ts';
-import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
+} from '../../src/server/apiHandlers.js';
+import { createManualAirQualityReading } from '../../src/utils/aqi.js';
 
 function createMockRequest(options: {
   method: string;

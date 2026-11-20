@@ -1,14 +1,14 @@
-import { API_TIMEOUT_MS, AQI_CACHE_TTL_MS } from '../constants/index.ts';
-import type { AirQualityReading, Language } from '../types/index.ts';
-import { clampAqi, getAqiCategory, pm25ToUsAqi } from '../utils/aqi.ts';
-import { buildAqiCacheKey, TtlCache } from '../utils/cache.ts';
+import { API_TIMEOUT_MS, AQI_CACHE_TTL_MS } from '../constants/index.js';
+import type { AirQualityReading, Language } from '../types/index.js';
+import { clampAqi, getAqiCategory, pm25ToUsAqi } from '../utils/aqi.js';
+import { buildAqiCacheKey, TtlCache } from '../utils/cache.js';
 import {
   buildOpenMeteoAqiUrl,
   createLinkedTimeoutController,
   fetchJsonWithProxyFallback,
   isAbortError,
-} from '../utils/network.ts';
-import { airQualityResponseSchema } from '../utils/validation.ts';
+} from '../utils/network.js';
+import { airQualityResponseSchema } from '../utils/validation.js';
 
 const aqiCache = new TtlCache<AirQualityReading>(AQI_CACHE_TTL_MS);
 const inFlightAqiRequests = new Map<string, Promise<AirQualityReading>>();

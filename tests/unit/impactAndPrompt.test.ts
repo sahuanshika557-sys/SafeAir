@@ -3,16 +3,16 @@ import {
   DEFAULT_LOCATION,
   DEFAULT_PROFILE,
   MAX_COMBINED_PM25_REDUCTION_PERCENT,
-} from '../../src/constants/index.ts';
-import { TRANSLATIONS } from '../../src/i18n/translations.ts';
-import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
-import { buildRuleBasedFallbackPlan } from '../../src/utils/fallbackPlan.ts';
+} from '../../src/constants/index.js';
+import { TRANSLATIONS } from '../../src/i18n/translations.js';
+import { createManualAirQualityReading } from '../../src/utils/aqi.js';
+import { buildRuleBasedFallbackPlan } from '../../src/utils/fallbackPlan.js';
 import {
   calculateWeeklyImpact,
   cleanImpactText,
   formatApproxCo2,
   sanitizeActionPlanImpact,
-} from '../../src/utils/impactCalculator.ts';
+} from '../../src/utils/impactCalculator.js';
 import {
   buildChatSystemInstruction,
   buildChatUserPrompt,
@@ -21,7 +21,7 @@ import {
   buildPlanUserPrompt,
   USER_DATA_END_DELIMITER,
   USER_DATA_START_DELIMITER,
-} from '../../src/utils/promptBuilder.ts';
+} from '../../src/utils/promptBuilder.js';
 
 describe('Impact calculator math & prefix cleaning', () => {
   it('returns zero impact when no choices are selected', () => {

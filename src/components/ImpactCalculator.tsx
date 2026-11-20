@@ -1,8 +1,8 @@
 import { memo, useMemo, useState, type ReactElement } from 'react';
-import { IMPACT_CHOICES, MAX_COMBINED_PM25_REDUCTION_PERCENT } from '../constants/index.ts';
-import type { TranslationDictionary } from '../i18n/translations.ts';
-import type { ImpactChoiceId, Language } from '../types/index.ts';
-import { calculateWeeklyImpact, formatApproxCo2 } from '../utils/impactCalculator.ts';
+import { IMPACT_CHOICES, MAX_COMBINED_PM25_REDUCTION_PERCENT } from '../constants/index.js';
+import type { TranslationDictionary } from '../i18n/translations.js';
+import type { ImpactChoiceId, Language } from '../types/index.js';
+import { calculateWeeklyImpact, formatApproxCo2 } from '../utils/impactCalculator.js';
 
 interface ImpactCalculatorProps {
   t: TranslationDictionary;

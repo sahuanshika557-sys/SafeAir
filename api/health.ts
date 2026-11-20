@@ -2,7 +2,7 @@ import {
   handleHealthRequest,
   type ServerApiRequest,
   type ServerApiResponse,
-} from '../src/server/apiHandlers.ts';
+} from '../src/server/apiHandlers.js';
 
 export const config = {
   maxDuration: 15,

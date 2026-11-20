@@ -1,5 +1,5 @@
-import { LANGUAGE_STORAGE_KEY } from '../constants/index.ts';
-import type { Language } from '../types/index.ts';
+import { LANGUAGE_STORAGE_KEY } from '../constants/index.js';
+import type { Language } from '../types/index.js';
 
 /**
  * Reads the persisted UI language preference safely.

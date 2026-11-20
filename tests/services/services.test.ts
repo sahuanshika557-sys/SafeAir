@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
-import { clearAqiCache, fetchAirQuality } from '../../src/services/airQuality.ts';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.js';
+import { clearAqiCache, fetchAirQuality } from '../../src/services/airQuality.js';
 import {
   generatePersonalizedPlan,
   resetGeminiClientState,
   streamFollowUpChat,
-} from '../../src/services/gemini.ts';
+} from '../../src/services/gemini.js';
 import {
   clearReverseGeocodeCache,
   reverseGeocodeCoordinates,
   searchCities,
-} from '../../src/services/geocoding.ts';
-import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
+} from '../../src/services/geocoding.js';
+import { createManualAirQualityReading } from '../../src/utils/aqi.js';
 
 function createSseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();

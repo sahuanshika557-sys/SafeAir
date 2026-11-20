@@ -1,4 +1,4 @@
-import type { Language, LifestyleProfile, LocationData } from '../types/index.ts';
+import type { Language, LifestyleProfile, LocationData } from '../types/index.js';
 
 interface CacheEntry<V> {
   value: V;

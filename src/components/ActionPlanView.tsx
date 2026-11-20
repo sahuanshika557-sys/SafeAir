@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
-import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis.ts';
-import type { TranslationDictionary } from '../i18n/translations.ts';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis.js';
+import type { TranslationDictionary } from '../i18n/translations.js';
 import type {
   ActionPlan,
   AirQualityReading,
@@ -9,9 +9,9 @@ import type {
   LocationData,
   PlanSectionKey,
   RecommendationItem,
-} from '../types/index.ts';
-import { cleanImpactText } from '../utils/impactCalculator.ts';
-import { ShieldIcon, StopIcon, VolumeIcon } from './Icons.tsx';
+} from '../types/index.js';
+import { cleanImpactText } from '../utils/impactCalculator.js';
+import { ShieldIcon, StopIcon, VolumeIcon } from './Icons.js';
 
 interface ActionPlanViewProps {
   t: TranslationDictionary;

@@ -1,12 +1,12 @@
-import { MAX_CHAT_HISTORY_MESSAGES } from '../constants/index.ts';
+import { MAX_CHAT_HISTORY_MESSAGES } from '../constants/index.js';
 import type {
   AirQualityReading,
   ChatMessage,
   Language,
   LifestyleProfile,
   LocationData,
-} from '../types/index.ts';
-import { sanitizeTextInput } from './validation.ts';
+} from '../types/index.js';
+import { sanitizeTextInput } from './validation.js';
 
 /** Delimiters wrapping all untrusted user-supplied data to defend against prompt injection. */
 export const USER_DATA_START_DELIMITER = '<<<USER_DATA_START>>>';

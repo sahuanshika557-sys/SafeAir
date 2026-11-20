@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Language } from '../types/index.ts';
+import type { Language } from '../types/index.js';
 
 /**
  * State and controls returned by {@link useSpeechSynthesis}.

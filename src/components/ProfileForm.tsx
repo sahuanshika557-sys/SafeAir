@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { MAX_FREE_TEXT_LENGTH } from '../constants/index.ts';
-import type { TranslationDictionary } from '../i18n/translations.ts';
+import { MAX_FREE_TEXT_LENGTH } from '../constants/index.js';
+import type { TranslationDictionary } from '../i18n/translations.js';
 import type {
   BudgetLevel,
   CommuteMode,
@@ -10,8 +10,8 @@ import type {
   Language,
   LifestyleProfile,
   WorkStyle,
-} from '../types/index.ts';
-import { validateProfile } from '../utils/validation.ts';
+} from '../types/index.js';
+import { validateProfile } from '../utils/validation.js';
 
 interface ProfileFormProps {
   t: TranslationDictionary;

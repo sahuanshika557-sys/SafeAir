@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
-import { API_TIMEOUT_MS } from '../constants/index.ts';
-import type { Language } from '../types/index.ts';
+import { API_TIMEOUT_MS } from '../constants/index.js';
+import type { Language } from '../types/index.js';
 
 /**
  * Geographic coordinates returned by {@link useGeolocation}.

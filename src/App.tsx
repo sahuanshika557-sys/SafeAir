@@ -7,22 +7,22 @@ import {
   useState,
   type ReactElement,
 } from 'react';
-import { ActionPlanView } from './components/ActionPlanView.tsx';
-import { AqiHeroCard } from './components/AqiHeroCard.tsx';
-import { ErrorBoundary } from './components/ErrorBoundary.tsx';
-import { Header } from './components/Header.tsx';
-import { MoonIcon, SunIcon } from './components/Icons.tsx';
-import { ProfileForm } from './components/ProfileForm.tsx';
-import { DEFAULT_PROFILE } from './constants/index.ts';
-import { useAirQuality } from './hooks/useAirQuality.ts';
-import { useGeolocation } from './hooks/useGeolocation.ts';
-import { usePlanGenerator } from './hooks/usePlanGenerator.ts';
-import { TRANSLATIONS } from './i18n/translations.ts';
-import type { Language, LifestyleProfile } from './types/index.ts';
-import { loadLanguagePreference, saveLanguagePreference } from './utils/storage.ts';
+import { ActionPlanView } from './components/ActionPlanView.js';
+import { AqiHeroCard } from './components/AqiHeroCard.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { Header } from './components/Header.js';
+import { MoonIcon, SunIcon } from './components/Icons.js';
+import { ProfileForm } from './components/ProfileForm.js';
+import { DEFAULT_PROFILE } from './constants/index.js';
+import { useAirQuality } from './hooks/useAirQuality.js';
+import { useGeolocation } from './hooks/useGeolocation.js';
+import { usePlanGenerator } from './hooks/usePlanGenerator.js';
+import { TRANSLATIONS } from './i18n/translations.js';
+import type { Language, LifestyleProfile } from './types/index.js';
+import { loadLanguagePreference, saveLanguagePreference } from './utils/storage.js';
 
-const LazyImpactCalculator = lazy(() => import('./components/ImpactCalculator.tsx'));
-const LazyFollowUpChat = lazy(() => import('./components/FollowUpChat.tsx'));
+const LazyImpactCalculator = lazy(() => import('./components/ImpactCalculator.js'));
+const LazyFollowUpChat = lazy(() => import('./components/FollowUpChat.js'));
 
 function SectionSkeleton({ label }: { label: string }): ReactElement {
   return (

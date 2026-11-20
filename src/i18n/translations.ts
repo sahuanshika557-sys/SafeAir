@@ -6,7 +6,7 @@ import type {
   HouseholdGroup,
   Language,
   WorkStyle,
-} from '../types/index.ts';
+} from '../types/index.js';
 
 export interface TranslationDictionary {
   skipToContent: string;

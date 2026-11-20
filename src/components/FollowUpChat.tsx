@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MAX_FREE_TEXT_LENGTH } from '../constants/index.ts';
-import type { TranslationDictionary } from '../i18n/translations.ts';
-import { streamFollowUpChat } from '../services/gemini.ts';
+import { MAX_FREE_TEXT_LENGTH } from '../constants/index.js';
+import type { TranslationDictionary } from '../i18n/translations.js';
+import { streamFollowUpChat } from '../services/gemini.js';
 import type {
   ActionPlan,
   AirQualityReading,
   ChatMessage,
   Language,
   LocationData,
-} from '../types/index.ts';
-import { isAbortError } from '../utils/network.ts';
-import { validateChatMessage } from '../utils/validation.ts';
+} from '../types/index.js';
+import { isAbortError } from '../utils/network.js';
+import { validateChatMessage } from '../utils/validation.js';
 
 interface FollowUpChatProps {
   t: TranslationDictionary;

@@ -1,16 +1,16 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.ts';
-import { useAirQuality } from '../../src/hooks/useAirQuality.ts';
-import { useDebounce } from '../../src/hooks/useDebounce.ts';
-import { useGeolocation } from '../../src/hooks/useGeolocation.ts';
-import { usePlanGenerator } from '../../src/hooks/usePlanGenerator.ts';
-import { useSpeechSynthesis } from '../../src/hooks/useSpeechSynthesis.ts';
-import { clearAqiCache } from '../../src/services/airQuality.ts';
-import { resetGeminiClientState } from '../../src/services/gemini.ts';
-import { clearReverseGeocodeCache } from '../../src/services/geocoding.ts';
-import { createManualAirQualityReading } from '../../src/utils/aqi.ts';
-import { loadLanguagePreference, saveLanguagePreference } from '../../src/utils/storage.ts';
+import { DEFAULT_LOCATION, DEFAULT_PROFILE } from '../../src/constants/index.js';
+import { useAirQuality } from '../../src/hooks/useAirQuality.js';
+import { useDebounce } from '../../src/hooks/useDebounce.js';
+import { useGeolocation } from '../../src/hooks/useGeolocation.js';
+import { usePlanGenerator } from '../../src/hooks/usePlanGenerator.js';
+import { useSpeechSynthesis } from '../../src/hooks/useSpeechSynthesis.js';
+import { clearAqiCache } from '../../src/services/airQuality.js';
+import { resetGeminiClientState } from '../../src/services/gemini.js';
+import { clearReverseGeocodeCache } from '../../src/services/geocoding.js';
+import { createManualAirQualityReading } from '../../src/utils/aqi.js';
+import { loadLanguagePreference, saveLanguagePreference } from '../../src/utils/storage.js';
 
 describe('Language storage helper', () => {
   beforeEach(() => {

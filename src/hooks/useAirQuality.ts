@@ -3,14 +3,14 @@ import {
   DEFAULT_LOCATION,
   GEOCODING_DEBOUNCE_MS,
   MIN_SEARCH_QUERY_LENGTH,
-} from '../constants/index.ts';
-import { fetchAirQuality } from '../services/airQuality.ts';
-import { reverseGeocodeCoordinates, searchCities } from '../services/geocoding.ts';
-import type { AirQualityReading, Language, LocationData } from '../types/index.ts';
-import { createManualAirQualityReading } from '../utils/aqi.ts';
-import { isAbortError } from '../utils/network.ts';
-import { validateCityQuery, validateManualAqi } from '../utils/validation.ts';
-import { useDebounce } from './useDebounce.ts';
+} from '../constants/index.js';
+import { fetchAirQuality } from '../services/airQuality.js';
+import { reverseGeocodeCoordinates, searchCities } from '../services/geocoding.js';
+import type { AirQualityReading, Language, LocationData } from '../types/index.js';
+import { createManualAirQualityReading } from '../utils/aqi.js';
+import { isAbortError } from '../utils/network.js';
+import { validateCityQuery, validateManualAqi } from '../utils/validation.js';
+import { useDebounce } from './useDebounce.js';
 
 /**
  * State and actions returned by {@link useAirQuality}.

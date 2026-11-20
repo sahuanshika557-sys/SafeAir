@@ -3,7 +3,7 @@ import {
   PLAN_CACHE_TTL_MS,
   RATE_LIMIT_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
-} from '../constants/index.ts';
+} from '../constants/index.js';
 import type {
   ActionPlan,
   AirQualityReading,
@@ -12,13 +12,13 @@ import type {
   Language,
   LifestyleProfile,
   LocationData,
-} from '../types/index.ts';
-import { buildPlanCacheKey, TtlCache } from '../utils/cache.ts';
-import { getLocalizedApiErrorMessage } from '../utils/errorDiagnostics.ts';
-import { sanitizeActionPlanImpact } from '../utils/impactCalculator.ts';
-import { createLinkedTimeoutController, isAbortError } from '../utils/network.ts';
-import { SlidingWindowRateLimiter } from '../utils/rateLimiter.ts';
-import { actionPlanSchema } from '../utils/validation.ts';
+} from '../types/index.js';
+import { buildPlanCacheKey, TtlCache } from '../utils/cache.js';
+import { getLocalizedApiErrorMessage } from '../utils/errorDiagnostics.js';
+import { sanitizeActionPlanImpact } from '../utils/impactCalculator.js';
+import { createLinkedTimeoutController, isAbortError } from '../utils/network.js';
+import { SlidingWindowRateLimiter } from '../utils/rateLimiter.js';
+import { actionPlanSchema } from '../utils/validation.js';
 
 const planCache = new TtlCache<ActionPlan>(PLAN_CACHE_TTL_MS);
 const clientRateLimiter = new SlidingWindowRateLimiter(

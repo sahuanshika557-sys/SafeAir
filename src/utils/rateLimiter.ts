@@ -1,5 +1,5 @@
-import { RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS } from '../constants/index.ts';
-import type { RateLimitResult } from '../types/index.ts';
+import { RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS } from '../constants/index.js';
+import type { RateLimitResult } from '../types/index.js';
 
 /**
  * Sliding-window rate limiter to protect AI endpoints from accidental bursts.

@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
-import type { TranslationDictionary } from '../i18n/translations.ts';
-import type { Language } from '../types/index.ts';
+import type { TranslationDictionary } from '../i18n/translations.js';
+import type { Language } from '../types/index.js';
 
 interface HeaderProps {
   t: TranslationDictionary;

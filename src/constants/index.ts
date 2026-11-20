@@ -1,4 +1,4 @@
-import type { AqiCategoryInfo, ImpactChoiceDefinition, LifestyleProfile } from '../types/index.ts';
+import type { AqiCategoryInfo, ImpactChoiceDefinition, LifestyleProfile } from '../types/index.js';
 
 /** Network timeout in milliseconds for external and AI requests. */
 export const API_TIMEOUT_MS = 15000;

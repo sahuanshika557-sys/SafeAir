@@ -1,21 +1,45 @@
 import 'dotenv/config';
 import express, { type Request, type Response } from 'express';
 import fs from 'node:fs';
+import { registerHooks } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  handleAqiRequest,
-  handleChatRequest,
-  handleGeocodeRequest,
-  handleHealthRequest,
-  handlePlanRequest,
-  handleReverseGeocodeRequest,
-} from './src/server/apiHandlers.ts';
-import { extractSafeErrorDiagnostics } from './src/utils/errorDiagnostics.ts';
+
+// Allow running `node server.ts` directly via Node 22 native TypeScript support even when
+// relative imports use standard ESM `.js` extensions required by Vercel's Node builder.
+if (typeof registerHooks === 'function') {
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (
+        (specifier.startsWith('./') || specifier.startsWith('../')) &&
+        specifier.endsWith('.js') &&
+        context.parentURL?.startsWith('file://') &&
+        !context.parentURL.includes('/node_modules/')
+      ) {
+        const tsUrl = new URL(specifier.slice(0, -3) + '.ts', context.parentURL);
+        if (!fs.existsSync(new URL(specifier, context.parentURL)) && fs.existsSync(tsUrl)) {
+          return nextResolve(tsUrl.href, context);
+        }
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+}
 
 const PORT = 3000;
 
 async function startServer(): Promise<void> {
+  const [
+    {
+      handleAqiRequest,
+      handleChatRequest,
+      handleGeocodeRequest,
+      handleHealthRequest,
+      handlePlanRequest,
+      handleReverseGeocodeRequest,
+    },
+  ] = await Promise.all([import('./src/server/apiHandlers.js')]);
+
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -84,7 +108,12 @@ async function startServer(): Promise<void> {
   });
 }
 
-startServer().catch((err: unknown) => {
-  console.error('Server failed to start:', extractSafeErrorDiagnostics(err));
+startServer().catch(async (err: unknown) => {
+  try {
+    const { extractSafeErrorDiagnostics } = await import('./src/utils/errorDiagnostics.js');
+    console.error('Server failed to start:', extractSafeErrorDiagnostics(err));
+  } catch {
+    console.error('Server failed to start:', err instanceof Error ? err.message : 'Unknown error');
+  }
   process.exit(1);
 });

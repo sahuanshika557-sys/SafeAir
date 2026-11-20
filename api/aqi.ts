@@ -2,7 +2,7 @@ import {
   handleAqiRequest,
   type ServerApiRequest,
   type ServerApiResponse,
-} from '../src/server/apiHandlers.ts';
+} from '../src/server/apiHandlers.js';
 
 /**
  * Vercel Node.js serverless function handler for `GET /api/aqi`.

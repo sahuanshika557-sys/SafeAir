@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
-import type { AqiCategoryKey } from '../types/index.ts';
+import type { AqiCategoryKey } from '../types/index.js';
 
 interface IconProps {
   className?: string;

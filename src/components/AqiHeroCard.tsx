@@ -1,9 +1,9 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { MAX_US_AQI, MIN_US_AQI } from '../constants/index.ts';
-import type { TranslationDictionary } from '../i18n/translations.ts';
-import type { AirQualityReading, Language, LocationData } from '../types/index.ts';
-import { formatAqiTimestamp } from '../utils/aqi.ts';
-import { AqiStatusIcon, LocateIcon, RefreshIcon, SearchIcon } from './Icons.tsx';
+import { MAX_US_AQI, MIN_US_AQI } from '../constants/index.js';
+import type { TranslationDictionary } from '../i18n/translations.js';
+import type { AirQualityReading, Language, LocationData } from '../types/index.js';
+import { formatAqiTimestamp } from '../utils/aqi.js';
+import { AqiStatusIcon, LocateIcon, RefreshIcon, SearchIcon } from './Icons.js';
 
 interface AqiHeroCardProps {
   t: TranslationDictionary;

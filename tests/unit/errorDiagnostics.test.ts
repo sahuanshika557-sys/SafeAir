@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { ApiErrorCategory } from '../../src/types/index.ts';
+import type { ApiErrorCategory } from '../../src/types/index.js';
 import {
   classifyUpstreamError,
   extractSafeErrorDiagnostics,
   getLocalizedApiErrorMessage,
-} from '../../src/utils/errorDiagnostics.ts';
+} from '../../src/utils/errorDiagnostics.js';
 
 describe('extractSafeErrorDiagnostics & error classification', () => {
   it('extracts errorType, numeric status, and message safely', () => {

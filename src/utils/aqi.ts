@@ -1,5 +1,5 @@
-import { AQI_CATEGORIES, MAX_US_AQI, MIN_US_AQI } from '../constants/index.ts';
-import type { AirQualityReading, AqiCategoryInfo, Language } from '../types/index.ts';
+import { AQI_CATEGORIES, MAX_US_AQI, MIN_US_AQI } from '../constants/index.js';
+import type { AirQualityReading, AqiCategoryInfo, Language } from '../types/index.js';
 
 /**
  * Clamps a numeric US AQI value to valid display bounds `[0, 500]`.
